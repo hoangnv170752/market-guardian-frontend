@@ -1,6 +1,7 @@
 import '../styles.css';
 
 import type { ReactNode } from 'react';
+import { FloatingContactButton } from '../components/floating-contact-button';
 
 type RootLayoutProps = { children: ReactNode };
 
@@ -23,6 +24,7 @@ export default async function RootLayout({ children }: RootLayoutProps) {
         {children}
       </main>
       {/* <Footer /> */}
+      <FloatingContactButton />
     </div>
   );
 }
