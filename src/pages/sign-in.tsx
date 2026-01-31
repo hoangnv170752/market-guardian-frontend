@@ -4,22 +4,24 @@ export default async function SignInPage() {
   const data = await getData();
 
   return (
-    <div className="flex min-h-screen w-full items-center justify-center">
+    <div className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-cover bg-center bg-no-repeat" style={{ backgroundImage: 'url(/images/stock-image.png)' }}>
       <title>{data.title}</title>
       
-      <div className="grid w-full max-w-6xl grid-cols-1 gap-12 px-6 lg:grid-cols-2 lg:gap-24">
-        <div className="flex flex-col justify-center space-y-6">
+      <div className="absolute inset-0 bg-black/50" />
+      
+      <div className="relative z-10 grid h-screen w-full grid-cols-1 lg:grid-cols-2">
+        <div className="flex flex-col justify-center px-12 lg:px-24">
           <div>
-            <h1 className="text-4xl font-bold tracking-tight text-gray-900">
-              Welcome back to Market Guardian
+            <h1 className="text-4xl font-bold tracking-tight text-white">
+              Welcome back to<br />Market Guardian
             </h1>
-            <p className="mt-2 text-gray-600">
+            <p className="mt-2 text-gray-200">
               Market Guardian - The best market analysis tool.
             </p>
           </div>
         </div>
 
-        <div className="flex flex-col justify-center">
+        <div className="flex flex-col items-center justify-center bg-white px-8 py-12 lg:px-16">
           <div className="w-full max-w-md space-y-6">
             <div>
               <h2 className="text-2xl font-semibold text-gray-900">
