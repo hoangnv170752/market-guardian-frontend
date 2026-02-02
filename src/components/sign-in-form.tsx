@@ -23,7 +23,7 @@ export const SignInForm = () => {
 
       if (data.success && data.data) {
         saveAuthData(email, password, data.data.token, data.data.user);
-        window.location.href = '/';
+        window.location.href = '/dashboard';
       } else {
         setError(data.message || 'Login failed. Please try again.');
       }

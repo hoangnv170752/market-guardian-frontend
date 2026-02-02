@@ -45,7 +45,7 @@ export default async function SignInPage() {
 
 const getData = async () => {
   const data = {
-    title: 'Sign In - Kangaroo Portal',
+    title: 'Sign In - Market Guardian',
   };
 
   return data;

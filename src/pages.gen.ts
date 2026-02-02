@@ -21,6 +21,7 @@ type Page =
 | ({ path: '/_404' } & GetConfigResponse<typeof File_404_getConfig>)
 | ({ path: '/about' } & GetConfigResponse<typeof File_About_getConfig>)
 | ({ path: '/dashboard/dashboard' } & GetConfigResponse<typeof File_DashboardDashboard_getConfig>)
+| { path: '/dashboard'; render: 'dynamic' }
 | ({ path: '/forgot-password' } & GetConfigResponse<typeof File_ForgotPassword_getConfig>)
 | { path: '/'; render: 'dynamic' }
 | ({ path: '/sign-in' } & GetConfigResponse<typeof File_SignIn_getConfig>)

@@ -1,4 +1,4 @@
-# Kangaroo Portal
+# Market Guardian
 
 A modern admin dashboard built with:
 

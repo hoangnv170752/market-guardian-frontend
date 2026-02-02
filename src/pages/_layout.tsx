@@ -2,10 +2,13 @@ import '../styles.css';
 
 import type { ReactNode } from 'react';
 import { FloatingContactButton } from '../components/floating-contact-button';
+import { initializeSyncfusionLicense } from '../lib/syncfusion-license';
 
 type RootLayoutProps = { children: ReactNode };
 
 export default async function RootLayout({ children }: RootLayoutProps) {
+  initializeSyncfusionLicense();
+  
   const data = await getData();
 
   return (
@@ -20,7 +23,7 @@ export default async function RootLayout({ children }: RootLayoutProps) {
         precedence="font"
       />
       {/* <Header /> */}
-      <main className="m-6 flex items-center *:min-h-64 *:min-w-64 lg:m-0 lg:min-h-svh lg:justify-center">
+      <main>
         {children}
       </main>
       {/* <Footer /> */}
@@ -31,7 +34,7 @@ export default async function RootLayout({ children }: RootLayoutProps) {
 
 const getData = async () => {
   const data = {
-    description: 'Kangaroo - Water purifier in Vietnam',
+    description: 'Market Guardian',
     icon: '/images/favicon.png',
   };
 

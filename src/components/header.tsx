@@ -6,7 +6,7 @@ export const Header = () => {
       <Link to="/" className="flex items-center gap-3">
         <img 
           src="/images/kangaroo.jpg" 
-          alt="Kangaroo Portal" 
+          alt="Market Guardian" 
           className="h-10 w-auto object-contain"
         />
       </Link>
