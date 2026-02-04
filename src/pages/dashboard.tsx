@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getAuthUser, clearAuthData, isAuthenticated } from '../utils/auth';
-import { User } from '../services/api';
+import { User, startDemoSession } from '../services/api';
 import { TradingChart } from '../components/trading-chart';
 import { AIRiskModal } from '../components/ai-risk-modal';
 
@@ -12,6 +12,7 @@ export default function DashboardPage() {
   const [isVolatile, setIsVolatile] = useState(false);
   const [showRiskModal, setShowRiskModal] = useState(false);
   const [showExtraInfo, setShowExtraInfo] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated()) {
@@ -22,6 +23,16 @@ export default function DashboardPage() {
     const userData = getAuthUser();
     setUser(userData);
     setLoading(false);
+
+    // Start demo session
+    startDemoSession()
+      .then((response) => {
+        setSessionId(response.sessionId);
+        console.log('Demo session started:', response.sessionId);
+      })
+      .catch((error) => {
+        console.error('Failed to start demo session:', error);
+      });
   }, []);
 
   useEffect(() => {
@@ -146,7 +157,7 @@ export default function DashboardPage() {
         <div className="flex flex-1 flex-col lg:flex-row gap-4 lg:gap-6 overflow-y-auto lg:overflow-hidden p-4 sm:p-6 lg:p-8">
           {/* Chart Section */}
           <div className="flex flex-1 flex-col rounded-xl bg-white p-4 sm:p-6 shadow-sm border border-gray-200 min-h-[400px]">
-            <TradingChart isVolatile={isVolatile} />
+            <TradingChart isVolatile={isVolatile} sessionId={sessionId} />
           </div>
 
           {/* Action Panel */}

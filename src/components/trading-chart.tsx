@@ -1,9 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import * as SyncfusionCharts from '@syncfusion/ej2-react-charts';
-
-const { ChartComponent, SeriesCollectionDirective, SeriesDirective, Inject, CandleSeries, Category, Tooltip, DateTime, Zoom, Logarithmic, Crosshair, Legend } = SyncfusionCharts;
+import { useEffect, useState, useRef } from 'react';
+import { getMarketEvent } from '../services/api';
 
 interface CandleData {
   x: Date;
@@ -15,71 +13,51 @@ interface CandleData {
 
 interface TradingChartProps {
   isVolatile: boolean;
+  sessionId: string | null;
 }
 
-export const TradingChart = ({ isVolatile }: TradingChartProps) => {
+export const TradingChart = ({ isVolatile, sessionId }: TradingChartProps) => {
   const [candles, setCandles] = useState<CandleData[]>([]);
   const [currentPrice, setCurrentPrice] = useState(1.0850);
 
   useEffect(() => {
-    // Initialize with mock data
-    const initialCandles: CandleData[] = [];
-    let basePrice = 1.0850;
-    const now = new Date();
-    
-    for (let i = 60; i >= 0; i--) {
-      const change = (Math.random() - 0.5) * 0.002;
-      basePrice += change;
-      const open = basePrice;
-      const close = basePrice + (Math.random() - 0.5) * 0.001;
-      const high = Math.max(open, close) + Math.random() * 0.0005;
-      const low = Math.min(open, close) - Math.random() * 0.0005;
-      
-      const time = new Date(now.getTime() - i * 60000);
-      
-      initialCandles.push({
-        x: time,
-        open,
-        high,
-        low,
-        close,
-      });
-    }
-    
-    setCandles(initialCandles);
-    const lastCandle = initialCandles[initialCandles.length - 1];
-    if (lastCandle) {
-      setCurrentPrice(lastCandle.close);
-    }
-  }, []);
+    if (!sessionId) return;
 
-  useEffect(() => {
-    // Update price periodically
-    const interval = setInterval(() => {
-      setCandles(prev => {
-        if (prev.length === 0) return prev;
-        const lastCandle = prev[prev.length - 1];
-        if (!lastCandle) return prev;
-        
-        const volatilityFactor = isVolatile ? 0.005 : 0.001;
-        const change = (Math.random() - 0.5) * volatilityFactor;
-        const newPrice = lastCandle.close + change;
+    // Fetch market data every 5 seconds
+    const fetchMarketData = async () => {
+      try {
+        const scenario = isVolatile ? 'volatile' : 'normal';
+        const response = await getMarketEvent(sessionId, scenario, 'BTC/USDT', '1s', 'viewing_chart');
         
         const newCandle: CandleData = {
-          x: new Date(),
-          open: lastCandle.close,
-          close: newPrice,
-          high: Math.max(lastCandle.close, newPrice) + Math.random() * 0.0003,
-          low: Math.min(lastCandle.close, newPrice) - Math.random() * 0.0003,
+          x: new Date(response.candle.openTime),
+          open: response.candle.open,
+          high: response.candle.high,
+          low: response.candle.low,
+          close: response.candle.close,
         };
+
+        setCandles(prev => {
+          const updated = [...prev, newCandle];
+          // Keep only last 60 candles
+          return updated.slice(-60);
+        });
         
-        setCurrentPrice(newPrice);
-        return [...prev.slice(-60), newCandle];
-      });
-    }, 2000);
+        setCurrentPrice(response.candle.close);
+      } catch (error) {
+        console.error('Failed to fetch market data:', error);
+      }
+    };
+
+    // Initial fetch
+    fetchMarketData();
+
+    // Set up interval for subsequent fetches
+    const interval = setInterval(fetchMarketData, 5000);
 
     return () => clearInterval(interval);
-  }, [isVolatile]);
+  }, [sessionId, isVolatile]);
+
 
   const lastCandle = candles[candles.length - 1];
   const prevCandle = candles[candles.length - 2];
@@ -91,63 +69,43 @@ export const TradingChart = ({ isVolatile }: TradingChartProps) => {
     <div className="flex h-full flex-col">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">EUR/USD</h2>
-          <p className="text-sm text-gray-600">Euro / US Dollar</p>
+          <h2 className="text-2xl font-bold text-gray-900">BTC/USDT</h2>
+          <p className="text-sm text-gray-600">Bitcoin / Tether</p>
         </div>
         <div className="text-right">
-          <div className="text-3xl font-bold text-gray-900">{currentPrice.toFixed(4)}</div>
+          <div className="text-3xl font-bold text-gray-900">${currentPrice.toFixed(2)}</div>
           <div className={`text-sm font-semibold ${priceChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
             {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
           </div>
         </div>
       </div>
-      <ChartComponent
-        id="candlestick-chart"
-        primaryXAxis={{
-          valueType: 'DateTime',
-          majorGridLines: { width: 0 },
-          crosshairTooltip: { enable: true },
-        }}
-        primaryYAxis={{
-          title: 'Price',
-          labelFormat: '{value}',
-          minimum: candles.length > 0 ? Math.min(...candles.map(c => c.low)) * 0.999 : 1.08,
-          maximum: candles.length > 0 ? Math.max(...candles.map(c => c.high)) * 1.001 : 1.09,
-          interval: 0.001,
-          lineStyle: { width: 0 },
-          majorTickLines: { width: 0 },
-        }}
-        tooltip={{ enable: true, shared: true }}
-        crosshair={{ enable: true, lineType: 'Vertical' }}
-        zoomSettings={{
-          enableMouseWheelZooming: true,
-          enablePinchZooming: true,
-          enableSelectionZooming: true,
-          mode: 'XY',
-          toolbarItems: ['Zoom', 'ZoomIn', 'ZoomOut', 'Pan', 'Reset']
-        }}
-        chartArea={{ border: { width: 0 } }}
-        width="100%"
-        height="400px"
-        background="transparent"
-      >
-        <Inject services={[CandleSeries, Category, Tooltip, DateTime, Zoom, Logarithmic, Crosshair, Legend]} />
-        <SeriesCollectionDirective>
-          <SeriesDirective
-            dataSource={candles}
-            xName="x"
-            yName="close"
-            low="low"
-            high="high"
-            open="open"
-            close="close"
-            type="Candle"
-            bearFillColor="#ef4444"
-            bullFillColor="#22c55e"
-            name="EUR/USD"
-          />
-        </SeriesCollectionDirective>
-      </ChartComponent>
+      
+      {/* Simple price list display */}
+      <div className="flex-1 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-4">
+        <h3 className="mb-3 text-sm font-semibold text-gray-700">Recent Prices</h3>
+        <div className="space-y-2">
+          {candles.slice(-10).reverse().map((candle, index) => (
+            <div key={index} className="flex items-center justify-between rounded-lg bg-white p-3 shadow-sm">
+              <div className="text-sm text-gray-600">
+                {new Date(candle.x).toLocaleTimeString()}
+              </div>
+              <div className="flex gap-4 text-sm">
+                <span className="text-gray-700">O: ${candle.open.toFixed(2)}</span>
+                <span className="text-gray-700">H: ${candle.high.toFixed(2)}</span>
+                <span className="text-gray-700">L: ${candle.low.toFixed(2)}</span>
+                <span className={`font-semibold ${candle.close >= candle.open ? 'text-green-600' : 'text-red-600'}`}>
+                  C: ${candle.close.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          ))}
+          {candles.length === 0 && (
+            <div className="text-center text-sm text-gray-500 py-8">
+              Waiting for market data...
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 };

@@ -2,13 +2,10 @@ import '../styles.css';
 
 import type { ReactNode } from 'react';
 import { FloatingContactButton } from '../components/floating-contact-button';
-import { initializeSyncfusionLicense } from '../lib/syncfusion-license';
 
 type RootLayoutProps = { children: ReactNode };
 
 export default async function RootLayout({ children }: RootLayoutProps) {
-  initializeSyncfusionLicense();
-  
   const data = await getData();
 
   return (

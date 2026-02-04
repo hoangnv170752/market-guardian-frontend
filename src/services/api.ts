@@ -179,3 +179,86 @@ export const resetPasswordApi = async (data: ResetPasswordRequest): Promise<Rese
 
   return response.json();
 };
+
+// Demo API Types
+export interface DemoSessionResponse {
+  sessionId: string;
+  message: string;
+}
+
+export interface Candle {
+  symbol: string;
+  timeframe: string;
+  openTime: number;
+  closeTime: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  quoteVolume: number;
+  trades: number;
+  takerBuyVolume: number;
+  takerBuyQuoteVolume: number;
+  isClosed: boolean;
+  scenario: string;
+}
+
+export interface MarketEventResponse {
+  scenario: string;
+  candle: Candle;
+  riskDetected: boolean;
+  state: string;
+  transitionType: string;
+  message: string | null;
+  signals: any[];
+  whatHappened: string | null;
+  metrics: any | null;
+  sessionId: string;
+}
+
+// Start demo session
+export const startDemoSession = async (): Promise<DemoSessionResponse> => {
+  const response = await fetch(`${API_BASE_URL}/demo/start`, {
+    method: 'POST',
+    headers: {
+      'accept': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to start demo session');
+  }
+
+  return response.json();
+};
+
+// Stream market events
+export const getMarketEvent = async (
+  sessionId: string,
+  scenario: string = 'normal',
+  pair: string = 'BTC/USDT',
+  timeframe: string = '1s',
+  userContext: string = 'viewing_chart'
+): Promise<MarketEventResponse> => {
+  const params = new URLSearchParams({
+    sessionId,
+    scenario,
+    pair,
+    timeframe,
+    userContext,
+  });
+
+  const response = await fetch(`${API_BASE_URL}/demo/stream?${params.toString()}`, {
+    method: 'GET',
+    headers: {
+      'accept': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch market event');
+  }
+
+  return response.json();
+};
