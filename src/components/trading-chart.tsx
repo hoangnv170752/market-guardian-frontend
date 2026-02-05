@@ -1,65 +1,10 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
-import { getMarketEvent } from '../services/api';
+import { Candle } from '../services/api';
 
-interface CandleData {
-  x: Date;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-}
-
-interface TradingChartProps {
-  isVolatile: boolean;
-  sessionId: string | null;
-}
-
-export const TradingChart = ({ isVolatile, sessionId }: TradingChartProps) => {
-  const [candles, setCandles] = useState<CandleData[]>([]);
-  const [currentPrice, setCurrentPrice] = useState(1.0850);
-
-  useEffect(() => {
-    if (!sessionId) return;
-
-    // Fetch market data every 5 seconds
-    const fetchMarketData = async () => {
-      try {
-        const scenario = isVolatile ? 'volatile' : 'normal';
-        const response = await getMarketEvent(sessionId, scenario, 'BTC/USDT', '1s', 'viewing_chart');
-        
-        const newCandle: CandleData = {
-          x: new Date(response.candle.openTime),
-          open: response.candle.open,
-          high: response.candle.high,
-          low: response.candle.low,
-          close: response.candle.close,
-        };
-
-        setCandles(prev => {
-          const updated = [...prev, newCandle];
-          // Keep only last 60 candles
-          return updated.slice(-60);
-        });
-        
-        setCurrentPrice(response.candle.close);
-      } catch (error) {
-        console.error('Failed to fetch market data:', error);
-      }
-    };
-
-    // Initial fetch
-    fetchMarketData();
-
-    // Set up interval for subsequent fetches
-    const interval = setInterval(fetchMarketData, 5000);
-
-    return () => clearInterval(interval);
-  }, [sessionId, isVolatile]);
-
-
+export const TradingChart = ({ candles }: { candles: Candle[] }) => {
   const lastCandle = candles[candles.length - 1];
+  const currentPrice = lastCandle ? lastCandle.close : 0;
   const prevCandle = candles[candles.length - 2];
   const priceChange = lastCandle && prevCandle
     ? ((lastCandle.close - prevCandle.close) / prevCandle.close) * 100
@@ -79,15 +24,15 @@ export const TradingChart = ({ isVolatile, sessionId }: TradingChartProps) => {
           </div>
         </div>
       </div>
-      
+
       {/* Simple price list display */}
       <div className="flex-1 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-4">
         <h3 className="mb-3 text-sm font-semibold text-gray-700">Recent Prices</h3>
         <div className="space-y-2">
-          {candles.slice(-10).reverse().map((candle, index) => (
+          {[...candles].slice(-10).reverse().map((candle, index) => (
             <div key={index} className="flex items-center justify-between rounded-lg bg-white p-3 shadow-sm">
               <div className="text-sm text-gray-600">
-                {new Date(candle.x).toLocaleTimeString()}
+                {new Date(candle.openTime).toLocaleTimeString()}
               </div>
               <div className="flex gap-4 text-sm">
                 <span className="text-gray-700">O: ${candle.open.toFixed(2)}</span>
