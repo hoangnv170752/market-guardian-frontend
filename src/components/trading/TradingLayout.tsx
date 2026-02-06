@@ -6,7 +6,8 @@ import { OrderPanel } from './OrderPanel';
 import { PositionsPanel } from './PositionsPanel';
 import { ScenarioControls } from './ScenarioControls';
 import { AIRiskModal } from '../ai-risk-modal';
-import { analyzeMarketEvent, startDemoSession } from '../../services/api';
+import { analyzeMarketEvent, startDemoSession, User } from '../../services/api';
+import { getAuthUser, clearAuthData, isAuthenticated } from '../../utils/auth';
 
 export const TradingLayout = () => {
     // Initialize Simulator once
@@ -17,12 +18,23 @@ export const TradingLayout = () => {
     }), []);
 
     const [timeframe, setTimeframe] = useState<Timeframe>('1m');
+    const [user, setUser] = useState<User | null>(null);
 
     // AI Modal State
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [alertData, setAlertData] = useState<{ message: string; riskLevel: string; streaming?: boolean } | null>(null);
     const lastAnalysisTime = useRef(0);
     const sessionIdRef = useRef<string | null>(null);
+
+    // Get user data
+    useEffect(() => {
+        if (!isAuthenticated()) {
+            window.location.href = '/sign-in';
+            return;
+        }
+        const userData = getAuthUser();
+        setUser(userData);
+    }, []);
 
     // Init Session
     useEffect(() => {
@@ -99,12 +111,55 @@ export const TradingLayout = () => {
         simulator.setTimeframe(tf);
     };
 
+    const handleSignOut = () => {
+        clearAuthData();
+        window.location.href = '/sign-in';
+    };
+
     return (
         <div className="flex flex-col h-screen w-full bg-[#0b0f14] text-white font-sans overflow-hidden">
-            {/* Top Bar Stats & Controls */}
-            <div className="flex bg-[#0b0f14] border-b border-[#283341] px-4 py-2 items-center justify-between">
-                <MarketStats />
-                <ScenarioControls simulator={simulator} />
+            {/* Top Bar with Logo, Stats & User Info */}
+            <div className="flex bg-[#0b0f14] border-b border-[#283341] px-4 py-2 items-center justify-between gap-4">
+                {/* Left: Logo */}
+                <div className="flex items-center gap-3 min-w-fit">
+                    <img 
+                        src="/images/logo-mg.png" 
+                        alt="Market Guardian" 
+                        className="h-8 w-8 object-contain"
+                    />
+                    <span className="text-lg font-bold text-white hidden sm:block">Market Guardian</span>
+                </div>
+
+                {/* Center: Market Stats */}
+                <div className="flex-1 flex justify-center">
+                    <MarketStats />
+                </div>
+
+                {/* Right: User Info & Controls */}
+                <div className="flex items-center gap-3 min-w-fit">
+                    <ScenarioControls simulator={simulator} />
+                    
+                    {/* User Account Info */}
+                    <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-[#1a2332] rounded-lg border border-[#283341]">
+                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-white text-xs font-semibold">
+                            {user?.name?.charAt(0).toUpperCase() || 'U'}
+                        </div>
+                        <div className="text-sm">
+                            <div className="text-white font-medium">{user?.name || 'User'}</div>
+                        </div>
+                    </div>
+
+                    {/* Sign Out Button */}
+                    <button
+                        onClick={handleSignOut}
+                        className="p-2 hover:bg-[#1a2332] rounded-lg transition-colors"
+                        title="Sign Out"
+                    >
+                        <svg className="h-5 w-5 text-gray-400 hover:text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                        </svg>
+                    </button>
+                </div>
             </div>
 
             {/* Main Grid */}

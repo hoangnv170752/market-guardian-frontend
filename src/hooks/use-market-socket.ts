@@ -57,10 +57,8 @@ export const useMarketSocket = ({ onRiskAlert, enabled = true }: UseMarketSocket
     const connect = useCallback(() => {
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-        // Use current host logic or env
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const backendHost = 'localhost:4000'; // Default to localhost:4000
-        const wsUrl = `${protocol}//${backendHost}/ws`;
+        // Use WebSocket URL from environment variable
+        const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:4000/ws';
 
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
