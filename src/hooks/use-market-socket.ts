@@ -8,6 +8,13 @@ interface WebSocketMessage {
 
 interface MarketGuardianState {
     isConnected: boolean;
+    streamStatus: string;
+    availablePairs: string[];
+    availableTimeframes: string[];
+    availableScenarios: string[];
+    selectedPair: string | null;
+    selectedTimeframe: string | null;
+    currentScenario: string | null;
     candles: Candle[];
     lastCandle: Candle | null;
     metrics: {
@@ -15,6 +22,7 @@ interface MarketGuardianState {
         rangePercent: number;
         priceChangePercent: number;
         trades: number;
+        lastPrice?: number;
     };
     currentAlert: {
         id: string;
@@ -26,16 +34,26 @@ interface MarketGuardianState {
     explanationChunk: string | null;
     explanationComplete: boolean;
     marketState: string;
+    orderbook: any | null;
+    tradesFeed: any[];
 }
 
 interface UseMarketSocketOptions {
     onRiskAlert?: (alert: any) => void;
+    onEvent?: (event: string, data: any) => void;
     enabled?: boolean;
 }
 
-export const useMarketSocket = ({ onRiskAlert, enabled = true }: UseMarketSocketOptions = {}) => {
+export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMarketSocketOptions = {}) => {
     const [state, setState] = useState<MarketGuardianState>({
         isConnected: false,
+        streamStatus: 'stopped',
+        availablePairs: [],
+        availableTimeframes: [],
+        availableScenarios: [],
+        selectedPair: null,
+        selectedTimeframe: null,
+        currentScenario: null,
         candles: [],
         lastCandle: null,
         metrics: {
@@ -48,11 +66,23 @@ export const useMarketSocket = ({ onRiskAlert, enabled = true }: UseMarketSocket
         explanationChunk: null,
         explanationComplete: false,
         marketState: 'NORMAL',
+        orderbook: null,
+        tradesFeed: [],
     });
 
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const fallbackTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const receivedChunkRef = useRef(false);
     const maxCandles = 60;
+    const maxTrades = 50;
+
+    const clearFallbackTimer = () => {
+        if (fallbackTimerRef.current) {
+            clearTimeout(fallbackTimerRef.current);
+            fallbackTimerRef.current = null;
+        }
+    };
 
     const connect = useCallback(() => {
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -79,6 +109,7 @@ export const useMarketSocket = ({ onRiskAlert, enabled = true }: UseMarketSocket
 
         ws.onerror = (error) => {
             console.error('WebSocket error:', error);
+            if (onEvent) onEvent('ws_error', error);
         };
 
         ws.onmessage = (event) => {
@@ -102,21 +133,63 @@ export const useMarketSocket = ({ onRiskAlert, enabled = true }: UseMarketSocket
             if (reconnectTimeoutRef.current) {
                 clearTimeout(reconnectTimeoutRef.current);
             }
+            clearFallbackTimer();
         };
     }, [enabled, connect]);
 
     const handleMessage = (msg: WebSocketMessage) => {
         const { event, data } = msg;
+        if (onEvent) onEvent(event, data);
 
         switch (event) {
             case 'connected':
-                if (data.candleHistory) {
-                    setState(prev => ({
+                setState(prev => {
+                    const availablePairs = Array.isArray(data.availablePairs) ? data.availablePairs : prev.availablePairs;
+                    const availableTimeframes = Array.isArray(data.availableTimeframes) ? data.availableTimeframes : prev.availableTimeframes;
+                    const availableScenarios = Array.isArray(data.availableScenarios) ? data.availableScenarios : prev.availableScenarios;
+                    const streamStatusValue = (() => {
+                        if (!data.streamStatus) return prev.streamStatus;
+                        if (typeof data.streamStatus === 'string') return data.streamStatus;
+                        if (typeof data.streamStatus === 'object') {
+                            return (
+                                data.streamStatus.status ||
+                                data.streamStatus.state ||
+                                data.streamStatus.mode ||
+                                prev.streamStatus
+                            );
+                        }
+                        return prev.streamStatus;
+                    })();
+                    const nextSelectedPair =
+                        data.pair ??
+                        data.selectedPair ??
+                        prev.selectedPair ??
+                        availablePairs[0] ??
+                        null;
+                    const nextSelectedTimeframe =
+                        data.timeframe ??
+                        data.selectedTimeframe ??
+                        prev.selectedTimeframe ??
+                        availableTimeframes[0] ??
+                        null;
+                    const nextScenario =
+                        data.scenario ??
+                        data.currentScenario ??
+                        prev.currentScenario ??
+                        null;
+                    return {
                         ...prev,
-                        candles: data.candleHistory.slice(-maxCandles),
-                        lastCandle: data.candleHistory[data.candleHistory.length - 1] || null,
-                    }));
-                }
+                        availablePairs,
+                        availableTimeframes,
+                        availableScenarios,
+                        selectedPair: nextSelectedPair,
+                        selectedTimeframe: nextSelectedTimeframe,
+                        currentScenario: nextScenario,
+                        streamStatus: streamStatusValue,
+                        candles: data.candleHistory ? data.candleHistory.slice(-maxCandles) : prev.candles,
+                        lastCandle: data.candleHistory ? data.candleHistory[data.candleHistory.length - 1] || null : prev.lastCandle,
+                    };
+                });
                 break;
             case 'candle':
                 setState(prev => {
@@ -145,13 +218,25 @@ export const useMarketSocket = ({ onRiskAlert, enabled = true }: UseMarketSocket
                     // ideally we wait for 'candle_closed' or a full candle object.
                     // Ignoring partial updates if we don't have an open candle to update is safer
                     // unless 'data' is a full candle.
+                    if (data?.openTime) {
+                        const newOpen = { ...data, isClosed: false } as Candle;
+                        newCandles.push(newOpen);
+                        if (newCandles.length > maxCandles) newCandles.shift();
+                        return { ...prev, candles: newCandles, lastCandle: newOpen };
+                    }
 
                     return prev;
                 });
                 break;
             case 'candle_closed':
                 setState(prev => {
-                    const newCandles = [...prev.candles, data];
+                    const newCandles = [...prev.candles];
+                    const existingIdx = newCandles.findIndex(c => c.openTime === data.openTime);
+                    if (existingIdx >= 0) {
+                        newCandles[existingIdx] = data;
+                    } else {
+                        newCandles.push(data);
+                    }
                     if (newCandles.length > maxCandles) newCandles.shift();
                     return { ...prev, candles: newCandles, lastCandle: data };
                 });
@@ -161,42 +246,72 @@ export const useMarketSocket = ({ onRiskAlert, enabled = true }: UseMarketSocket
                     ...prev,
                     metrics: {
                         ...prev.metrics,
-                        priceChangePercent: data.priceChangePercent,
-                        trades: data.trades
+                        priceChangePercent: data.priceChangePercent ?? prev.metrics.priceChangePercent,
+                        trades: data.trades ?? prev.metrics.trades,
+                        lastPrice: data.lastPrice ?? data.price ?? prev.metrics.lastPrice,
                     }
                 }));
                 break;
             case 'risk_alert':
                 if (onRiskAlert) onRiskAlert(data);
+                receivedChunkRef.current = false;
+                clearFallbackTimer();
                 setState(prev => ({
                     ...prev,
                     currentAlert: {
                         id: data.alertId,
                         riskLevel: data.riskLevel,
-                        message: 'Risk detected...',
+                        message: data.message || 'Risk detected...',
                         signals: data.signals || [],
-                        isStreaming: data.streaming
+                        isStreaming: data.streaming === true
                     },
+                    explanationChunk: null,
+                    explanationComplete: false,
                     metrics: {
                         ...prev.metrics,
                         volumeRatio: data.metrics?.volumeRatio || prev.metrics.volumeRatio,
                         rangePercent: data.metrics?.rangePercent || prev.metrics.rangePercent
                     }
                 }));
+                if (data.streaming === true && data.alertId) {
+                    fallbackTimerRef.current = setTimeout(() => {
+                        if (!receivedChunkRef.current) {
+                            setState(prev => {
+                                if (!prev.currentAlert || prev.currentAlert.id !== data.alertId) return prev;
+                                const safeMessage =
+                                    prev.currentAlert.message && prev.currentAlert.message !== 'Risk detected...'
+                                        ? prev.currentAlert.message
+                                        : 'Market conditions changed measurably. Price movement variance increased compared to previous intervals.';
+                                return {
+                                    ...prev,
+                                    currentAlert: {
+                                        ...prev.currentAlert,
+                                        message: safeMessage,
+                                        isStreaming: true
+                                    }
+                                };
+                            });
+                        }
+                    }, 3000);
+                }
                 break;
             case 'explanation_chunk':
+                receivedChunkRef.current = true;
+                clearFallbackTimer();
                 setState(prev => {
                     if (prev.currentAlert && prev.currentAlert.id === data.alertId) {
+                        const chunkText = data.partialText ?? data.chunk ?? '';
                         const newMessage = prev.currentAlert.message === 'Risk detected...'
-                            ? data.chunk
-                            : prev.currentAlert.message + data.chunk;
+                            ? chunkText
+                            : prev.currentAlert.message + chunkText;
 
                         return {
                             ...prev,
-                            explanationChunk: data.chunk,
+                            explanationChunk: chunkText,
                             currentAlert: {
                                 ...prev.currentAlert,
-                                message: newMessage
+                                message: newMessage,
+                                isStreaming: true
                             }
                         };
                     }
@@ -204,10 +319,67 @@ export const useMarketSocket = ({ onRiskAlert, enabled = true }: UseMarketSocket
                 });
                 break;
             case 'explanation_complete':
-                setState(prev => ({ ...prev, explanationComplete: true }));
+                clearFallbackTimer();
+                setState(prev => {
+                    if (prev.currentAlert && prev.currentAlert.id === data.alertId) {
+                        return {
+                            ...prev,
+                            explanationComplete: true,
+                            explanationChunk: null,
+                            currentAlert: {
+                                ...prev.currentAlert,
+                                message: data.message || prev.currentAlert.message,
+                                isStreaming: false
+                            }
+                        };
+                    }
+                    return { ...prev, explanationComplete: true };
+                });
                 break;
             case 'state_change':
-                setState(prev => ({ ...prev, marketState: data.newState }));
+                if (data?.type === 'market_state') {
+                    const nextState =
+                        data.market_state?.state ??
+                        data.market_state?.riskLevel ??
+                        data.market_state ??
+                        data.state ??
+                        data.newState;
+                    if (nextState) {
+                        setState(prev => ({
+                            ...prev,
+                            marketState: nextState,
+                            metrics: {
+                                ...prev.metrics,
+                                volumeRatio: data.market_state?.metrics?.volumeRatio ?? data.metrics?.volumeRatio ?? prev.metrics.volumeRatio,
+                                rangePercent: data.market_state?.metrics?.rangePercent ?? data.metrics?.rangePercent ?? prev.metrics.rangePercent
+                            }
+                        }));
+                    }
+                } else if (data?.type === 'scenario_changed') {
+                    const nextScenario =
+                        data.scenario_changed?.scenario ??
+                        data.scenario ??
+                        data.currentScenario ??
+                        null;
+                    if (nextScenario) {
+                        setState(prev => ({ ...prev, currentScenario: nextScenario }));
+                    }
+                }
+                break;
+            case 'stream_started':
+                setState(prev => ({ ...prev, streamStatus: 'running' }));
+                break;
+            case 'stream_stopped':
+                setState(prev => ({ ...prev, streamStatus: 'stopped' }));
+                break;
+            case 'orderbook':
+                setState(prev => ({ ...prev, orderbook: data }));
+                break;
+            case 'trade':
+                setState(prev => ({
+                    ...prev,
+                    tradesFeed: [data, ...prev.tradesFeed].slice(0, maxTrades)
+                }));
                 break;
             default:
                 break;

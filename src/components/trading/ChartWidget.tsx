@@ -1,22 +1,39 @@
 'use client';
 
 import { createChart, ColorType, IChartApi, ISeriesApi, Time, CrosshairMode, CandlestickSeries, HistogramSeries } from 'lightweight-charts';
-import { useEffect, useRef, useState } from 'react';
-import { MarketSimulator, OHLC, Timeframe } from '../../lib/market-simulator';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Candle } from '../../services/api';
 
 interface ChartWidgetProps {
-    simulator: MarketSimulator;
-    timeframe: Timeframe;
-    onTimeframeChange: (tf: Timeframe) => void;
+    candles: Candle[];
+    pair: string;
+    timeframe: string;
+    availablePairs: string[];
+    availableTimeframes: string[];
+    onPairChange: (pair: string) => void;
+    onTimeframeChange: (tf: string) => void;
 }
 
-export const ChartWidget = ({ simulator, timeframe, onTimeframeChange }: ChartWidgetProps) => {
+const toChartTime = (t: number) => {
+    if (!t) return 0;
+    return t > 1_000_000_000_000 ? Math.floor(t / 1000) : t;
+};
+
+export const ChartWidget = ({
+    candles,
+    pair,
+    timeframe,
+    availablePairs,
+    availableTimeframes,
+    onPairChange,
+    onTimeframeChange
+}: ChartWidgetProps) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartApiRef = useRef<IChartApi | null>(null);
     const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
     const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
 
-    const [lastCandle, setLastCandle] = useState<OHLC | null>(null);
+    const [lastCandle, setLastCandle] = useState<Candle | null>(null);
 
     // Initialize Chart
     useEffect(() => {
@@ -103,69 +120,55 @@ export const ChartWidget = ({ simulator, timeframe, onTimeframeChange }: ChartWi
         };
     }, []);
 
-    // Handle Data & Subscription
+    const sortedCandles = useMemo(() => {
+        if (!candles?.length) return [];
+        const ordered = [...candles].sort((a, b) => {
+            const timeDiff = a.openTime - b.openTime;
+            if (timeDiff !== 0) return timeDiff;
+            const closedDiff = Number(a.isClosed) - Number(b.isClosed);
+            if (closedDiff !== 0) return closedDiff;
+            return (a.closeTime || 0) - (b.closeTime || 0);
+        });
+        const byTime = new Map<number, Candle>();
+        for (const c of ordered) {
+            const t = toChartTime(c.openTime);
+            if (!t) continue;
+            byTime.set(t, c);
+        }
+        return Array.from(byTime.entries())
+            .sort((a, b) => a[0] - b[0])
+            .map(([, c]) => c);
+    }, [candles]);
+
+    // Handle Data Updates
     useEffect(() => {
-        // Wait for chart to be initialized
         if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
 
-        // 1. Initial Data
-        const history = simulator.generateHistory(300, timeframe);
+        if (!sortedCandles.length) {
+            candleSeriesRef.current.setData([]);
+            volumeSeriesRef.current.setData([]);
+            setLastCandle(null);
+            return;
+        }
 
-        // Map to Lightweight Charts format
-        const chartData = history.map(h => ({
-            time: h.time as Time,
-            open: h.open,
-            high: h.high,
-            low: h.low,
-            close: h.close,
+        const chartData = sortedCandles.map(c => ({
+            time: toChartTime(c.openTime) as Time,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
         }));
 
-        const volumeData = history.map(h => ({
-            time: h.time as Time,
-            value: h.volume || 0,
-            color: h.close >= h.open ? 'rgba(43, 212, 125, 0.2)' : 'rgba(255, 92, 92, 0.2)',
+        const volumeData = sortedCandles.map(c => ({
+            time: toChartTime(c.openTime) as Time,
+            value: c.volume || 0,
+            color: c.close >= c.open ? 'rgba(43, 212, 125, 0.2)' : 'rgba(255, 92, 92, 0.2)',
         }));
 
         candleSeriesRef.current.setData(chartData);
         volumeSeriesRef.current.setData(volumeData);
-
-        // Set last candle for header stats
-        setLastCandle(history[history.length - 1] || null);
-
-        // 2. Realtime Updates
-        const unsubscribe = simulator.subscribe((candle, isClosed) => {
-            if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
-
-            const update = {
-                time: candle.time as Time,
-                open: candle.open,
-                high: candle.high,
-                low: candle.low,
-                close: candle.close,
-            };
-
-            const volumeUpdate = {
-                time: candle.time as Time,
-                value: candle.volume || 0,
-                color: candle.close >= candle.open ? 'rgba(43, 212, 125, 0.2)' : 'rgba(255, 92, 92, 0.2)',
-            };
-
-            candleSeriesRef.current.update(update);
-            volumeSeriesRef.current.update(volumeUpdate);
-
-            setLastCandle({ ...candle });
-        });
-
-        // Ensure simulator is started
-        simulator.start();
-
-        return () => {
-            unsubscribe();
-            // Don't stop simulator here if other components rely on it, 
-            // but in this architecture, ChartWidget controls it.
-            simulator.stop();
-        };
-    }, [simulator, timeframe]);
+        setLastCandle(sortedCandles[sortedCandles.length - 1] || null);
+    }, [sortedCandles]);
 
     // Format Helpers
     const formatPrice = (p: number) => p.toFixed(2);
@@ -183,24 +186,35 @@ export const ChartWidget = ({ simulator, timeframe, onTimeframeChange }: ChartWi
                 <div className="flex items-center gap-4">
                     {/* Symbol */}
                     <div className="flex items-baseline gap-2">
-                        <h2 className="text-lg font-bold text-white">BTC/USDT</h2>
-                        <span className="text-xs text-[#9aa7b2]">Bitcoin Index</span>
+                        <h2 className="text-lg font-bold text-white">{pair}</h2>
+                        <span className="text-xs text-[#9aa7b2]">Live Market</span>
                     </div>
 
                     {/* Timeframe Selector */}
-                    <div className="flex rounded bg-[#141b23] p-0.5">
-                        {(['1m', '5m', '15m'] as Timeframe[]).map((tf) => (
-                            <button
-                                key={tf}
-                                onClick={() => onTimeframeChange(tf)}
-                                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${timeframe === tf
-                                    ? 'bg-[#283341] text-white'
-                                    : 'text-[#9aa7b2] hover:text-white'
-                                    }`}
-                            >
-                                {tf}
-                            </button>
-                        ))}
+                    <div className="flex items-center gap-2">
+                        <select
+                            value={pair}
+                            onChange={(e) => onPairChange(e.target.value)}
+                            className="bg-[#141b23] border border-[#283341] text-xs text-white rounded px-2 py-1"
+                        >
+                            {(availablePairs.length ? availablePairs : [pair]).map(p => (
+                                <option key={p} value={p}>{p}</option>
+                            ))}
+                        </select>
+                        <div className="flex rounded bg-[#141b23] p-0.5">
+                            {(availableTimeframes.length ? availableTimeframes : [timeframe]).map((tf) => (
+                                <button
+                                    key={tf}
+                                    onClick={() => onTimeframeChange(tf)}
+                                    className={`px-3 py-1 text-xs font-medium rounded transition-colors ${timeframe === tf
+                                        ? 'bg-[#283341] text-white'
+                                        : 'text-[#9aa7b2] hover:text-white'
+                                        }`}
+                                >
+                                    {tf}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 </div>
 

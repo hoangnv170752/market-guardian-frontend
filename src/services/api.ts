@@ -311,3 +311,25 @@ export const analyzeMarketEvent = async (data: MarketAnalysisRequest): Promise<M
 
   return response.json();
 };
+
+// Market config fallback
+export interface MarketConfigResponse {
+  availablePairs: string[];
+  availableTimeframes: string[];
+  availableScenarios: string[];
+}
+
+export const fetchMarketConfig = async (): Promise<MarketConfigResponse> => {
+  const response = await fetch(`${API_BASE_URL}/market/config`, {
+    method: 'GET',
+    headers: {
+      'accept': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch market config');
+  }
+
+  return response.json();
+};

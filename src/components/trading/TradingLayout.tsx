@@ -1,30 +1,111 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
-import { MarketSimulator, Timeframe } from '../../lib/market-simulator';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { ChartWidget } from './ChartWidget';
 import { MarketStats } from './MarketStats';
 import { OrderPanel } from './OrderPanel';
 import { PositionsPanel } from './PositionsPanel';
 import { ScenarioControls } from './ScenarioControls';
 import { AIRiskModal } from '../ai-risk-modal';
-import { analyzeMarketEvent, startDemoSession, User } from '../../services/api';
+import { User, fetchMarketConfig } from '../../services/api';
 import { getAuthUser, clearAuthData, isAuthenticated } from '../../utils/auth';
+import { useMarketSocket } from '../../hooks/use-market-socket';
+import { EventLog } from './EventLog';
+import { OrderbookTradesPanel } from './OrderbookTradesPanel';
 
 export const TradingLayout = () => {
-    // Initialize Simulator once
-    const simulator = useMemo(() => new MarketSimulator({
-        startPrice: 98450.00,
-        volatility: 0.0005, // Moderate volatility
-        symbol: 'BTC/USDT'
-    }), []);
-
-    const [timeframe, setTimeframe] = useState<Timeframe>('1m');
+    const [timeframe, setTimeframe] = useState('1m');
+    const [pair, setPair] = useState('BTC/USDT');
     const [user, setUser] = useState<User | null>(null);
+    const [activity, setActivity] = useState<'viewing_chart' | 'placing_order' | 'idle'>('viewing_chart');
+    const [eventLog, setEventLog] = useState<Array<{ id: string; timestamp: number; level: 'info' | 'warn' | 'error'; message: string }>>([]);
+    const [fallbackConfig, setFallbackConfig] = useState<{ pairs: string[]; timeframes: string[]; scenarios: string[] }>({
+        pairs: [],
+        timeframes: [],
+        scenarios: []
+    });
 
     // AI Modal State
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [alertData, setAlertData] = useState<{ message: string; riskLevel: string; streaming?: boolean } | null>(null);
-    const lastAnalysisTime = useRef(0);
-    const sessionIdRef = useRef<string | null>(null);
+    const alertIdRef = useRef<string | null>(null);
+    const didInitPairRef = useRef(false);
+    const didInitTimeframeRef = useRef(false);
+    const didAutoStartRef = useRef(false);
+    const addLog = useCallback((level: 'info' | 'warn' | 'error', message: string) => {
+        setEventLog(prev => {
+            const next = [...prev, { id: `${Date.now()}-${prev.length}`, timestamp: Date.now(), level, message }];
+            return next.slice(-200);
+        });
+    }, []);
+
+    const {
+        isConnected,
+        streamStatus,
+        availablePairs,
+        availableTimeframes,
+        availableScenarios,
+        selectedPair,
+        selectedTimeframe,
+        currentScenario,
+        marketState,
+        candles,
+        metrics,
+        orderbook,
+        tradesFeed,
+        currentAlert,
+        sendMessage
+    } = useMarketSocket({
+        onEvent: (event, data) => {
+            if (event === 'error' || event === 'ws_error') {
+                addLog('error', data?.message || 'WebSocket error');
+            }
+        }
+    });
+
+    const pairsList = availablePairs.length ? availablePairs : fallbackConfig.pairs;
+    const timeframesList = availableTimeframes.length ? availableTimeframes : fallbackConfig.timeframes;
+    const scenariosList = availableScenarios.length ? availableScenarios : fallbackConfig.scenarios;
+
+    const resolveScenario = useCallback(
+        (scenario: 'pump' | 'crash') => {
+            if (!scenariosList.length) return null;
+            const normalized = scenario.toLowerCase();
+            const exact = scenariosList.find(s => s.toLowerCase() === normalized);
+            if (exact) return exact;
+            const fuzzy = scenariosList.find(s => s.toLowerCase().includes(normalized));
+            return fuzzy || null;
+        },
+        [scenariosList]
+    );
+
+    useEffect(() => {
+        if (!didInitPairRef.current && selectedPair) {
+            setPair(selectedPair);
+            didInitPairRef.current = true;
+        }
+    }, [selectedPair]);
+
+    useEffect(() => {
+        if (!didInitTimeframeRef.current && selectedTimeframe) {
+            setTimeframe(selectedTimeframe);
+            didInitTimeframeRef.current = true;
+        }
+    }, [selectedTimeframe]);
+
+    useEffect(() => {
+        const loadConfig = async () => {
+            try {
+                const config = await fetchMarketConfig();
+                setFallbackConfig({
+                    pairs: config.availablePairs || [],
+                    timeframes: config.availableTimeframes || [],
+                    scenarios: config.availableScenarios || []
+                });
+                addLog('info', 'Loaded market config');
+            } catch (err) {
+                addLog('warn', 'Failed to load market config');
+            }
+        };
+        loadConfig();
+    }, []);
 
     // Get user data
     useEffect(() => {
@@ -36,79 +117,24 @@ export const TradingLayout = () => {
         setUser(userData);
     }, []);
 
-    // Init Session
     useEffect(() => {
-        const initSession = async () => {
-            try {
-                const session = await startDemoSession();
-                sessionIdRef.current = session.sessionId;
-                console.log('Session initialized:', session.sessionId);
-            } catch (err) {
-                console.error('Failed to init session:', err);
-            }
-        };
-        initSession();
-    }, []);
-
-    // Subscribe to simulator ticks and analyze
-    useEffect(() => {
-        const unsubscribe = simulator.subscribe(async (candle, isClosed) => {
-            const now = Date.now();
-
-            // Analyze on candle close OR every 2 seconds if volatility is high
-            // We use a simple throttle here
-            if (isClosed || now - lastAnalysisTime.current > 2000) {
-                lastAnalysisTime.current = now;
-
-                try {
-                    // Call Backend API
-                    const analysis = await analyzeMarketEvent({
-                        sessionId: sessionIdRef.current || undefined,
-                        open: candle.open,
-                        high: candle.high,
-                        low: candle.low,
-                        close: candle.close,
-                        volume: candle.volume || 0,
-                        timestamp: candle.time as number,
-                        userContext: 'viewing_chart'
-                    });
-
-                    if (analysis.riskDetected) {
-                        setAlertData({
-                            message: analysis.message || 'High market volatility detected.',
-                            riskLevel: analysis.state === 'HIGH_RISK' ? 'HIGH_RISK' : 'VOLATILE',
-                            streaming: false
-                        });
-                        setIsModalOpen(true);
-                    }
-                } catch (err) {
-                    console.error('Analysis API failed:', err);
-                }
-            }
-        });
-
-        // Also listen to manual triggers for immediate feedback (Fallback/UX)
-        const unsubscribeAlerts = simulator.onAlert((alert) => {
-            // We can use this to show an immediate "Analyzing..." state if we want,
-            // or just let the API loop handle it naturally.
-            // For better UX during "Pump" button press, let's open it.
-            setAlertData({
-                message: "Abnormal market activity detected. Analyzing market data...",
-                riskLevel: 'HIGH_RISK',
-                streaming: true
-            });
+        if (currentAlert?.id && currentAlert.id !== alertIdRef.current) {
+            alertIdRef.current = currentAlert.id;
             setIsModalOpen(true);
-        });
+            addLog('warn', `Risk alert: ${currentAlert.riskLevel}`);
+        }
+    }, [currentAlert?.id]);
 
-        return () => {
-            unsubscribe();
-            unsubscribeAlerts();
-        };
-    }, [simulator]);
-
-    const handleTimeframeChange = (tf: Timeframe) => {
+    const handleTimeframeChange = (tf: string) => {
         setTimeframe(tf);
-        simulator.setTimeframe(tf);
+        sendMessage('set_timeframe', { timeframe: tf });
+        addLog('info', `Timeframe set to ${tf}`);
+    };
+
+    const handlePairChange = (nextPair: string) => {
+        setPair(nextPair);
+        sendMessage('set_pair', { pair: nextPair });
+        addLog('info', `Pair set to ${nextPair}`);
     };
 
     const handleSignOut = () => {
@@ -116,8 +142,53 @@ export const TradingLayout = () => {
         window.location.href = '/sign-in';
     };
 
+    useEffect(() => {
+        if (pairsList.length && !pairsList.includes(pair)) {
+            const nextPair = pairsList[0];
+            if (!nextPair) return;
+            setPair(nextPair);
+            sendMessage('set_pair', { pair: nextPair });
+        }
+    }, [pairsList, pair, sendMessage]);
+
+    useEffect(() => {
+        if (timeframesList.length && !timeframesList.includes(timeframe)) {
+            const nextTf = timeframesList[0];
+            if (!nextTf) return;
+            setTimeframe(nextTf);
+            sendMessage('set_timeframe', { timeframe: nextTf });
+        }
+    }, [timeframesList, timeframe, sendMessage]);
+
+    useEffect(() => {
+        if (isConnected) {
+            addLog('info', 'WebSocket connected');
+        } else {
+            addLog('warn', 'WebSocket disconnected');
+            didAutoStartRef.current = false;
+        }
+    }, [isConnected]);
+
+    useEffect(() => {
+        if (!isConnected) return;
+        if (!didAutoStartRef.current) {
+            sendMessage('start_stream', { mode: 'normal', speed: 'normal', pair });
+            addLog('info', 'Auto-started stream');
+            didAutoStartRef.current = true;
+        }
+        sendMessage('get_orderbook', { depth: 20 });
+        sendMessage('get_trades', { count: 20 });
+    }, [isConnected, pair, timeframe, sendMessage]);
+
+    useEffect(() => {
+        if (streamStatus) {
+            const label = typeof streamStatus === 'string' ? streamStatus : 'unknown';
+            addLog('info', `Stream status: ${label}`);
+        }
+    }, [streamStatus]);
+
     return (
-        <div className="flex flex-col h-screen w-full bg-[#0b0f14] text-white font-sans overflow-hidden">
+        <div className="flex flex-col h-screen w-full bg-[#0b0f14] text-white font-sans overflow-hidden" suppressHydrationWarning>
             {/* Top Bar with Logo, Stats & User Info */}
             <div className="flex bg-[#0b0f14] border-b border-[#283341] px-4 py-2 items-center justify-between gap-4">
                 {/* Left: Logo */}
@@ -132,12 +203,64 @@ export const TradingLayout = () => {
 
                 {/* Center: Market Stats */}
                 <div className="flex-1 flex justify-center">
-                    <MarketStats />
+                    <MarketStats metrics={metrics} />
                 </div>
 
                 {/* Right: User Info & Controls */}
                 <div className="flex items-center gap-3 min-w-fit">
-                    <ScenarioControls simulator={simulator} />
+                    <div className="flex items-center gap-2">
+                        <span className={`text-xs px-2 py-1 rounded-full border ${isConnected ? 'border-[#2bd47d] text-[#2bd47d]' : 'border-[#ff5c5c] text-[#ff5c5c]'}`}>
+                            {isConnected ? 'CONNECTED' : 'DISCONNECTED'}
+                        </span>
+                        <span className={`text-xs px-2 py-1 rounded-full border ${streamStatus === 'running' ? 'border-[#2bd47d] text-[#2bd47d]' : 'border-[#54616e] text-[#9aa7b2]'}`}>
+                            {streamStatus === 'running' ? 'STREAMING' : 'STOPPED'}
+                        </span>
+                        <span className={`text-xs px-2 py-1 rounded-full border ${marketState === 'HIGH_RISK' ? 'border-[#ff5c5c] text-[#ff5c5c]' : marketState === 'VOLATILE' ? 'border-[#f0b90b] text-[#f0b90b]' : 'border-[#2bd47d] text-[#2bd47d]'}`}>
+                            {marketState}
+                        </span>
+                        <span className="text-xs px-2 py-1 rounded-full border border-[#283341] text-[#9aa7b2]">
+                            {currentScenario ? `SCENARIO: ${currentScenario}` : 'SCENARIO: NORMAL'}
+                        </span>
+                    </div>
+
+                    <ScenarioControls
+                        onScenario={(scenario) => {
+                            const resolved = resolveScenario(scenario);
+                            if (!resolved) {
+                                addLog('warn', `Scenario not available: ${scenario}`);
+                                return;
+                            }
+                            sendMessage('set_scenario', {
+                                scenario: resolved,
+                                duration: 15,
+                                intensity: 1.0
+                            });
+                            addLog('warn', `Scenario triggered: ${resolved}`);
+                        }}
+                    />
+
+                    <div className="flex items-center gap-1 rounded bg-[#141b23] p-1">
+                        <button
+                            onClick={() => {
+                                setActivity('viewing_chart');
+                                sendMessage('user_activity', { activity: 'viewing_chart' });
+                                addLog('info', 'Activity: viewing_chart');
+                            }}
+                            className={`px-2 py-1 text-xs rounded ${activity === 'viewing_chart' ? 'bg-[#283341] text-white' : 'text-[#9aa7b2]'}`}
+                        >
+                            Viewing
+                        </button>
+                        <button
+                            onClick={() => {
+                                setActivity('placing_order');
+                                sendMessage('user_activity', { activity: 'placing_order' });
+                                addLog('info', 'Activity: placing_order');
+                            }}
+                            className={`px-2 py-1 text-xs rounded ${activity === 'placing_order' ? 'bg-[#283341] text-white' : 'text-[#9aa7b2]'}`}
+                        >
+                            Trading
+                        </button>
+                    </div>
                     
                     {/* User Account Info */}
                     <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-[#1a2332] rounded-lg border border-[#283341]">
@@ -163,16 +286,20 @@ export const TradingLayout = () => {
             </div>
 
             {/* Main Grid */}
-            <div className="flex-1 overflow-hidden p-3 gap-3 grid grid-cols-1 lg:grid-cols-[1fr_320px] grid-rows-[1fr_auto] lg:grid-rows-1">
+            <div className="flex-1 overflow-hidden p-3 gap-3 grid grid-cols-1 lg:grid-cols-[1fr_360px] grid-rows-[1fr_auto] lg:grid-rows-1">
 
                 {/* Left Column: Chart & Positions */}
                 <div className="flex flex-col gap-3 min-h-0">
                     {/* Chart Area */}
                     <div className="flex-1 min-h-[400px]">
                         <ChartWidget
-                            simulator={simulator}
+                            candles={candles}
                             timeframe={timeframe}
                             onTimeframeChange={handleTimeframeChange}
+                            availableTimeframes={timeframesList}
+                            pair={pair}
+                            availablePairs={pairsList}
+                            onPairChange={handlePairChange}
                         />
                     </div>
 
@@ -183,8 +310,10 @@ export const TradingLayout = () => {
                 </div>
 
                 {/* Right Column: Order Entry */}
-                <div className="w-full h-full overflow-y-auto">
+                <div className="w-full h-full overflow-y-auto flex flex-col gap-3">
                     <OrderPanel />
+                    <OrderbookTradesPanel orderbook={orderbook} trades={tradesFeed} />
+                    <EventLog entries={eventLog} />
                 </div>
 
                 {/* Mobile Positions Tab (if needed) */}
@@ -196,13 +325,27 @@ export const TradingLayout = () => {
             {/* AI Intervention Modal */}
             <AIRiskModal
                 isOpen={isModalOpen}
-                onClose={() => setIsModalOpen(false)}
-                onExplainMore={() => {
-                    // In demo, just keep open or maybe show more detail
+                onClose={() => {
                     setIsModalOpen(false);
+                    if (currentAlert?.id) {
+                        sendMessage('alert_response', { alertId: currentAlert.id, response: 'dismissed' });
+                    }
                 }}
-                alertMessage={alertData?.message || ''}
-                riskLevel={alertData?.riskLevel || 'high'}
+                onExplainMore={() => {
+                    if (currentAlert?.id) {
+                        sendMessage('alert_response', { alertId: currentAlert.id, response: 'waited' });
+                    }
+                }}
+                onContinue={() => {
+                    if (currentAlert?.id) {
+                        sendMessage('alert_response', { alertId: currentAlert.id, response: 'continued' });
+                    }
+                }}
+                alertMessage={currentAlert?.message || ''}
+                riskLevel={currentAlert?.riskLevel || 'high'}
+                signals={currentAlert?.signals || []}
+                metrics={metrics}
+                isStreaming={currentAlert?.isStreaming || false}
             />
         </div>
     );
