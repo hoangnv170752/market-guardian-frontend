@@ -1,4 +1,4 @@
-const API_BASE_URL = 'https://market-guardian-be.onrender.com/api';
+const API_BASE_URL = 'http://localhost:4000/api';
 
 export interface LoginRequest {
   email: string;
@@ -60,7 +60,17 @@ export const loginApi = async (credentials: LoginRequest): Promise<LoginResponse
   });
 
   if (!response.ok) {
-    throw new Error('Login failed');
+    try {
+      const errorData = await response.json();
+      const message = errorData.message || (errorData.errors && errorData.errors[0]) || 'Login failed';
+      throw new Error(message);
+    } catch (e: any) {
+      // If parsing fails or we just caught the error we threw above
+      if (e.message !== 'Login failed' && e.message) {
+        throw e;
+      }
+      throw new Error('Login failed');
+    }
   }
 
   return response.json();
@@ -258,6 +268,45 @@ export const getMarketEvent = async (
 
   if (!response.ok) {
     throw new Error('Failed to fetch market event');
+  }
+
+  return response.json();
+};
+
+export interface MarketAnalysisRequest {
+  sessionId?: string | undefined;
+  userContext?: string | undefined;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  timestamp?: number;
+}
+
+export interface MarketAnalysisResponse {
+  riskDetected: boolean;
+  state: string;
+  transitionType: string;
+  message: string | null;
+  signals: string[];
+  whatHappened: string | null;
+  metrics: any;
+  sessionId: string | null;
+}
+
+export const analyzeMarketEvent = async (data: MarketAnalysisRequest): Promise<MarketAnalysisResponse> => {
+  const response = await fetch(`${API_BASE_URL}/market/event`, {
+    method: 'POST',
+    headers: {
+      'accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to analyze market event');
   }
 
   return response.json();
