@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Candle } from '../services/api';
+import { Candle, fetchMarketCandles } from '../services/api';
 
 interface WebSocketMessage {
     event: string;
@@ -31,8 +31,13 @@ interface MarketGuardianState {
         signals: string[];
         isStreaming: boolean;
     } | null;
+    currentAlertId: string | null;
+    streamingAlertId: string | null;
+    streamTextByAlert: Record<string, string>;
     explanationChunk: string | null;
     explanationComplete: boolean;
+    explanationCompleteTick: number;
+    lastExplanationCompleteAlertId: string | null;
     marketState: string;
     orderbook: any | null;
     tradesFeed: any[];
@@ -45,6 +50,8 @@ interface UseMarketSocketOptions {
 }
 
 export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMarketSocketOptions = {}) => {
+    const STREAM_PLACEHOLDER = 'Generating explanation...';
+    const LEGACY_STREAM_PLACEHOLDER = 'Risk detected...';
     const [state, setState] = useState<MarketGuardianState>({
         isConnected: false,
         streamStatus: 'stopped',
@@ -63,8 +70,13 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
             trades: 0,
         },
         currentAlert: null,
+        currentAlertId: null,
+        streamingAlertId: null,
+        streamTextByAlert: {},
         explanationChunk: null,
         explanationComplete: false,
+        explanationCompleteTick: 0,
+        lastExplanationCompleteAlertId: null,
         marketState: 'NORMAL',
         orderbook: null,
         tradesFeed: [],
@@ -74,8 +86,24 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
     const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const fallbackTimerRef = useRef<NodeJS.Timeout | null>(null);
     const receivedChunkRef = useRef(false);
-    const maxCandles = 60;
+    const selectedPairRef = useRef<string | null>(null);
+    const selectedTimeframeRef = useRef<string | null>(null);
+    const candlesFetchSeqRef = useRef(0);
+    const onEventRef = useRef(onEvent);
+    const maxCandles = 500;
     const maxTrades = 50;
+
+    useEffect(() => {
+        onEventRef.current = onEvent;
+    }, [onEvent]);
+
+    useEffect(() => {
+        selectedPairRef.current = state.selectedPair;
+    }, [state.selectedPair]);
+
+    useEffect(() => {
+        selectedTimeframeRef.current = state.selectedTimeframe;
+    }, [state.selectedTimeframe]);
 
     const clearFallbackTimer = () => {
         if (fallbackTimerRef.current) {
@@ -83,6 +111,60 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
             fallbackTimerRef.current = null;
         }
     };
+
+    const loadCandlesHistory = useCallback(async (params: {
+        pair?: string | null;
+        timeframe?: string | null;
+        sessionId?: string;
+        from?: string | number;
+        to?: string | number;
+        limit?: number;
+    } = {}) => {
+        const pair = params.pair ?? selectedPairRef.current;
+        const timeframe = params.timeframe ?? selectedTimeframeRef.current;
+        if (!pair || !timeframe) return;
+
+        const requestId = ++candlesFetchSeqRef.current;
+        try {
+            const candleParams: {
+                pair: string;
+                timeframe: string;
+                limit: number;
+                sessionId?: string;
+                from?: string | number;
+                to?: string | number;
+            } = {
+                pair,
+                timeframe,
+                limit: Math.max(1, Math.min(1000, params.limit ?? 300)),
+            };
+            if (params.sessionId !== undefined) candleParams.sessionId = params.sessionId;
+            if (params.from !== undefined) candleParams.from = params.from;
+            if (params.to !== undefined) candleParams.to = params.to;
+            const result = await fetchMarketCandles(candleParams);
+
+            setState(prev => {
+                if (requestId !== candlesFetchSeqRef.current) return prev;
+                if (prev.selectedPair && prev.selectedPair !== pair) return prev;
+                if (prev.selectedTimeframe && prev.selectedTimeframe !== timeframe) return prev;
+                const nextCandles = result.candles.slice(-maxCandles);
+                return {
+                    ...prev,
+                    candles: nextCandles,
+                    lastCandle: nextCandles[nextCandles.length - 1] || null,
+                };
+            });
+        } catch (error: any) {
+            if (requestId !== candlesFetchSeqRef.current) return;
+            if (onEventRef.current) {
+                onEventRef.current('candles_error', {
+                    message: error?.message || 'Failed to fetch candles',
+                    pair,
+                    timeframe,
+                });
+            }
+        }
+    }, []);
 
     const connect = useCallback(() => {
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -109,7 +191,7 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
 
         ws.onerror = (error) => {
             console.error('WebSocket error:', error);
-            if (onEvent) onEvent('ws_error', error);
+            if (onEventRef.current) onEventRef.current('ws_error', error);
         };
 
         ws.onmessage = (event) => {
@@ -139,10 +221,27 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
 
     const handleMessage = (msg: WebSocketMessage) => {
         const { event, data } = msg;
-        if (onEvent) onEvent(event, data);
+        if (onEventRef.current) onEventRef.current(event, data);
 
         switch (event) {
             case 'connected':
+                {
+                const connectedPairs = Array.isArray(data.availablePairs) ? data.availablePairs : [];
+                const connectedTimeframes = Array.isArray(data.availableTimeframes) ? data.availableTimeframes : [];
+                const nextPairForFetch = (
+                    data.pair ??
+                    data.selectedPair ??
+                    selectedPairRef.current ??
+                    connectedPairs[0] ??
+                    null
+                );
+                const nextTimeframeForFetch = (
+                    data.timeframe ??
+                    data.selectedTimeframe ??
+                    selectedTimeframeRef.current ??
+                    connectedTimeframes[0] ??
+                    null
+                );
                 setState(prev => {
                     const availablePairs = Array.isArray(data.availablePairs) ? data.availablePairs : prev.availablePairs;
                     const availableTimeframes = Array.isArray(data.availableTimeframes) ? data.availableTimeframes : prev.availableTimeframes;
@@ -177,6 +276,10 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
                         data.currentScenario ??
                         prev.currentScenario ??
                         null;
+                    const pairChanged =
+                        nextSelectedPair !== null &&
+                        prev.selectedPair !== null &&
+                        nextSelectedPair !== prev.selectedPair;
                     return {
                         ...prev,
                         availablePairs,
@@ -186,13 +289,37 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
                         selectedTimeframe: nextSelectedTimeframe,
                         currentScenario: nextScenario,
                         streamStatus: streamStatusValue,
-                        candles: data.candleHistory ? data.candleHistory.slice(-maxCandles) : prev.candles,
-                        lastCandle: data.candleHistory ? data.candleHistory[data.candleHistory.length - 1] || null : prev.lastCandle,
+                        candles: data.candleHistory
+                            ? data.candleHistory.slice(-maxCandles)
+                            : pairChanged
+                                ? []
+                                : prev.candles,
+                        lastCandle: data.candleHistory
+                            ? data.candleHistory[data.candleHistory.length - 1] || null
+                            : pairChanged
+                                ? null
+                                : prev.lastCandle,
+                        orderbook: pairChanged ? null : prev.orderbook,
+                        tradesFeed: pairChanged ? [] : prev.tradesFeed,
                     };
                 });
+                if (nextPairForFetch && nextTimeframeForFetch) {
+                    void loadCandlesHistory({
+                        pair: String(nextPairForFetch),
+                        timeframe: String(nextTimeframeForFetch),
+                        limit: 300,
+                    });
+                }
                 break;
+                }
             case 'candle':
                 setState(prev => {
+                    if (data?.symbol && prev.selectedPair && data.symbol !== prev.selectedPair) {
+                        return prev;
+                    }
+                    if (data?.timeframe && prev.selectedTimeframe && data.timeframe !== prev.selectedTimeframe) {
+                        return prev;
+                    }
                     const newCandles = [...prev.candles];
                     const lastIdx = newCandles.length - 1;
 
@@ -230,6 +357,12 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
                 break;
             case 'candle_closed':
                 setState(prev => {
+                    if (data?.symbol && prev.selectedPair && data.symbol !== prev.selectedPair) {
+                        return prev;
+                    }
+                    if (data?.timeframe && prev.selectedTimeframe && data.timeframe !== prev.selectedTimeframe) {
+                        return prev;
+                    }
                     const newCandles = [...prev.candles];
                     const existingIdx = newCandles.findIndex(c => c.openTime === data.openTime);
                     if (existingIdx >= 0) {
@@ -252,38 +385,50 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
                     }
                 }));
                 break;
-            case 'risk_alert':
+            case 'risk_alert': {
                 if (onRiskAlert) onRiskAlert(data);
                 receivedChunkRef.current = false;
                 clearFallbackTimer();
+                const alertId = data.alertId ? String(data.alertId) : null;
                 setState(prev => ({
                     ...prev,
                     currentAlert: {
-                        id: data.alertId,
+                        id: alertId || '',
                         riskLevel: data.riskLevel,
-                        message: data.message || 'Risk detected...',
+                        message: data.message || STREAM_PLACEHOLDER,
                         signals: data.signals || [],
                         isStreaming: data.streaming === true
                     },
+                    currentAlertId: alertId,
+                    streamingAlertId: data.streaming === true ? alertId : null,
+                    streamTextByAlert: alertId
+                        ? { ...prev.streamTextByAlert, [alertId]: '' }
+                        : prev.streamTextByAlert,
                     explanationChunk: null,
                     explanationComplete: false,
                     metrics: {
                         ...prev.metrics,
-                        volumeRatio: data.metrics?.volumeRatio || prev.metrics.volumeRatio,
-                        rangePercent: data.metrics?.rangePercent || prev.metrics.rangePercent
+                        volumeRatio: data.metrics?.volumeRatio ?? prev.metrics.volumeRatio,
+                        rangePercent: data.metrics?.rangePercent ?? prev.metrics.rangePercent
                     }
                 }));
                 if (data.streaming === true && data.alertId) {
                     fallbackTimerRef.current = setTimeout(() => {
                         if (!receivedChunkRef.current) {
                             setState(prev => {
-                                if (!prev.currentAlert || prev.currentAlert.id !== data.alertId) return prev;
+                                if (!prev.currentAlert || prev.currentAlert.id !== String(data.alertId)) return prev;
                                 const safeMessage =
-                                    prev.currentAlert.message && prev.currentAlert.message !== 'Risk detected...'
+                                    prev.currentAlert.message &&
+                                        prev.currentAlert.message !== STREAM_PLACEHOLDER &&
+                                        prev.currentAlert.message !== LEGACY_STREAM_PLACEHOLDER
                                         ? prev.currentAlert.message
                                         : 'Market conditions changed measurably. Price movement variance increased compared to previous intervals.';
                                 return {
                                     ...prev,
+                                    streamTextByAlert: {
+                                        ...prev.streamTextByAlert,
+                                        [String(data.alertId)]: safeMessage
+                                    },
                                     currentAlert: {
                                         ...prev.currentAlert,
                                         message: safeMessage,
@@ -295,45 +440,88 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
                     }, 3000);
                 }
                 break;
+            }
             case 'explanation_chunk':
                 receivedChunkRef.current = true;
                 clearFallbackTimer();
                 setState(prev => {
-                    if (prev.currentAlert && prev.currentAlert.id === data.alertId) {
-                        const chunkText = data.partialText ?? data.chunk ?? '';
-                        const newMessage = prev.currentAlert.message === 'Risk detected...'
-                            ? chunkText
-                            : prev.currentAlert.message + chunkText;
+                    const alertId = data.alertId ? String(data.alertId) : null;
+                    if (!alertId) return prev;
+                    const chunkText = data.partialText ?? data.chunk ?? '';
+                    const resetBuffer =
+                        prev.currentAlert?.id === alertId &&
+                        prev.currentAlert.isStreaming === false;
+                    const priorText = resetBuffer ? '' : (prev.streamTextByAlert[alertId] || '');
+                    const nextText = `${priorText}${chunkText}`;
 
+                    if (prev.currentAlert && prev.currentAlert.id === alertId) {
                         return {
                             ...prev,
                             explanationChunk: chunkText,
+                            currentAlertId: alertId,
+                            streamingAlertId: alertId,
+                            streamTextByAlert: {
+                                ...prev.streamTextByAlert,
+                                [alertId]: nextText
+                            },
                             currentAlert: {
                                 ...prev.currentAlert,
-                                message: newMessage,
+                                message: nextText || prev.currentAlert.message,
                                 isStreaming: true
                             }
                         };
                     }
-                    return prev;
+                    return {
+                        ...prev,
+                        explanationChunk: chunkText,
+                        currentAlertId: prev.currentAlertId ?? alertId,
+                        streamingAlertId: alertId,
+                        streamTextByAlert: {
+                            ...prev.streamTextByAlert,
+                            [alertId]: nextText
+                        }
+                    };
                 });
                 break;
             case 'explanation_complete':
                 clearFallbackTimer();
                 setState(prev => {
-                    if (prev.currentAlert && prev.currentAlert.id === data.alertId) {
+                    const alertId = data.alertId ? String(data.alertId) : null;
+                    const completedText = data.message ||
+                        (alertId ? prev.streamTextByAlert[alertId] : '') ||
+                        prev.currentAlert?.message ||
+                        '';
+                    const nextStreamText = alertId
+                        ? {
+                            ...prev.streamTextByAlert,
+                            [alertId]: completedText
+                        }
+                        : prev.streamTextByAlert;
+                    if (prev.currentAlert && prev.currentAlert.id === alertId) {
                         return {
                             ...prev,
                             explanationComplete: true,
                             explanationChunk: null,
+                            streamingAlertId: null,
+                            streamTextByAlert: nextStreamText,
+                            explanationCompleteTick: prev.explanationCompleteTick + 1,
+                            lastExplanationCompleteAlertId: alertId,
                             currentAlert: {
                                 ...prev.currentAlert,
-                                message: data.message || prev.currentAlert.message,
+                                message: completedText,
                                 isStreaming: false
                             }
                         };
                     }
-                    return { ...prev, explanationComplete: true };
+                    return {
+                        ...prev,
+                        explanationComplete: true,
+                        explanationChunk: null,
+                        streamingAlertId: prev.streamingAlertId === alertId ? null : prev.streamingAlertId,
+                        streamTextByAlert: nextStreamText,
+                        explanationCompleteTick: prev.explanationCompleteTick + 1,
+                        lastExplanationCompleteAlertId: alertId
+                    };
                 });
                 break;
             case 'state_change':
@@ -387,14 +575,54 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
     };
 
     const sendMessage = useCallback((event: string, data: any = {}) => {
+        // Clear stale market data immediately when switching pair/timeframe.
+        if (event === 'set_pair' && data?.pair) {
+            const nextPair = String(data.pair);
+            const nextTimeframe = data?.timeframe
+                ? String(data.timeframe)
+                : (selectedTimeframeRef.current || '1m');
+            setState(prev => ({
+                ...prev,
+                selectedPair: nextPair,
+                selectedTimeframe: prev.selectedTimeframe || nextTimeframe,
+                candles: [],
+                lastCandle: null,
+                orderbook: null,
+                tradesFeed: [],
+            }));
+            void loadCandlesHistory({
+                pair: nextPair,
+                timeframe: nextTimeframe,
+                limit: 300,
+            });
+        }
+        if (event === 'set_timeframe' && data?.timeframe) {
+            const nextTimeframe = String(data.timeframe);
+            const nextPair = data?.pair
+                ? String(data.pair)
+                : (selectedPairRef.current || 'BTC/USDT');
+            setState(prev => ({
+                ...prev,
+                selectedPair: prev.selectedPair || nextPair,
+                selectedTimeframe: nextTimeframe,
+                candles: [],
+                lastCandle: null,
+            }));
+            void loadCandlesHistory({
+                pair: nextPair,
+                timeframe: nextTimeframe,
+                limit: 300,
+            });
+        }
         if (wsRef.current?.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({ event, data }));
         }
-    }, []);
+    }, [loadCandlesHistory]);
 
     return {
         ...state,
         sendMessage,
+        refetchCandles: loadCandlesHistory,
         isConnected: state.isConnected
     };
 };
