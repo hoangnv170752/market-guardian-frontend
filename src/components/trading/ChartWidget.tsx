@@ -151,7 +151,21 @@ export const ChartWidget = ({
             return;
         }
 
-        const chartData = sortedCandles.map(c => ({
+        // Filter out candles with null/undefined values
+        const validCandles = sortedCandles.filter(c => 
+            c.open != null && c.high != null && c.low != null && c.close != null &&
+            typeof c.open === 'number' && typeof c.high === 'number' && 
+            typeof c.low === 'number' && typeof c.close === 'number'
+        );
+
+        if (!validCandles.length) {
+            candleSeriesRef.current.setData([]);
+            volumeSeriesRef.current.setData([]);
+            setLastCandle(null);
+            return;
+        }
+
+        const chartData = validCandles.map(c => ({
             time: toChartTime(c.openTime) as Time,
             open: c.open,
             high: c.high,
@@ -159,7 +173,7 @@ export const ChartWidget = ({
             close: c.close,
         }));
 
-        const volumeData = sortedCandles.map(c => ({
+        const volumeData = validCandles.map(c => ({
             time: toChartTime(c.openTime) as Time,
             value: c.volume || 0,
             color: c.close >= c.open ? 'rgba(43, 212, 125, 0.2)' : 'rgba(255, 92, 92, 0.2)',
@@ -167,7 +181,7 @@ export const ChartWidget = ({
 
         candleSeriesRef.current.setData(chartData);
         volumeSeriesRef.current.setData(volumeData);
-        setLastCandle(sortedCandles[sortedCandles.length - 1] || null);
+        setLastCandle(validCandles[validCandles.length - 1] || null);
     }, [sortedCandles]);
 
     // Format Helpers
