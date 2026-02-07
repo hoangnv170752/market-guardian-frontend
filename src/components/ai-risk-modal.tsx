@@ -19,7 +19,8 @@ interface AIRiskModalProps {
     [key: string]: any;
   };
   isStreaming?: boolean;
-  isLoadingAnalysis?: boolean;
+  isExplainLoading?: boolean;
+  isExplainUsed?: boolean;
   fullAnalysis?: FullAnalysisResponse | null;
 }
 
@@ -38,23 +39,30 @@ export const AIRiskModal = ({
   signals = [],
   metrics,
   isStreaming = false,
-  isLoadingAnalysis = false,
+  isExplainLoading = false,
+  isExplainUsed = false,
   fullAnalysis
 }: AIRiskModalProps) => {
   if (!isOpen) return null;
 
   const hasFullAnalysis = !!fullAnalysis;
+  const explainButtonDisabled = isExplainLoading || isExplainUsed;
+  const explainButtonLabel = isExplainLoading
+    ? 'Generating...'
+    : isExplainUsed
+      ? 'Analysis shown'
+      : 'Explain more';
 
   const isHighRisk = riskLevel === 'HIGH_RISK' || riskLevel === 'CRITICAL_RISK' || riskLevel === 'high';
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/80 backdrop-blur-sm p-4 sm:p-6"
       onClick={onClose}
     >
       <div
-        className={`relative w-full rounded-xl bg-[#1d2631] shadow-2xl border-t-4 flex flex-col transition-all duration-300 ${
-          hasFullAnalysis ? 'max-w-4xl max-h-[90vh]' : 'max-w-lg'
+        className={`relative w-full max-h-[90vh] rounded-xl bg-[#1d2631] shadow-2xl border-t-4 flex flex-col transition-all duration-300 ${
+          hasFullAnalysis ? 'max-w-4xl' : 'max-w-lg'
         } ${isHighRisk ? 'border-[#ff5c5c]' : 'border-[#f0b90b]'}`}
         onClick={(e) => e.stopPropagation()}
       >
@@ -83,7 +91,7 @@ export const AIRiskModal = ({
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {/* Summary */}
           <div className="text-[#e6edf3] leading-relaxed text-base">
-            {alertMessage && alertMessage !== 'Risk detected...' ? alertMessage : (
+            {alertMessage && alertMessage !== 'Risk detected...' && alertMessage !== 'Generating explanation...' ? alertMessage : (
               <span className="text-[#9aa7b2] italic animate-pulse">Analyzing market conditions...</span>
             )}
             {isStreaming && (
@@ -214,20 +222,10 @@ export const AIRiskModal = ({
           {!hasFullAnalysis ? (
             <button
               onClick={onExplainMore}
-              disabled={isLoadingAnalysis}
+              disabled={explainButtonDisabled}
               className="flex-1 rounded-lg bg-[#4ea1ff] px-6 py-3 font-semibold text-white transition-colors hover:bg-[#3b82f6] shadow-lg shadow-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isLoadingAnalysis ? (
-                <span className="flex items-center justify-center gap-2">
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  Analyzing...
-                </span>
-              ) : (
-                'Full Analysis'
-              )}
+              {explainButtonLabel}
             </button>
           ) : (
             <button

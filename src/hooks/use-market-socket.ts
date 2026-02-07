@@ -31,8 +31,13 @@ interface MarketGuardianState {
         signals: string[];
         isStreaming: boolean;
     } | null;
+    currentAlertId: string | null;
+    streamingAlertId: string | null;
+    streamTextByAlert: Record<string, string>;
     explanationChunk: string | null;
     explanationComplete: boolean;
+    explanationCompleteTick: number;
+    lastExplanationCompleteAlertId: string | null;
     marketState: string;
     orderbook: any | null;
     tradesFeed: any[];
@@ -45,6 +50,8 @@ interface UseMarketSocketOptions {
 }
 
 export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMarketSocketOptions = {}) => {
+    const STREAM_PLACEHOLDER = 'Generating explanation...';
+    const LEGACY_STREAM_PLACEHOLDER = 'Risk detected...';
     const [state, setState] = useState<MarketGuardianState>({
         isConnected: false,
         streamStatus: 'stopped',
@@ -63,8 +70,13 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
             trades: 0,
         },
         currentAlert: null,
+        currentAlertId: null,
+        streamingAlertId: null,
+        streamTextByAlert: {},
         explanationChunk: null,
         explanationComplete: false,
+        explanationCompleteTick: 0,
+        lastExplanationCompleteAlertId: null,
         marketState: 'NORMAL',
         orderbook: null,
         tradesFeed: [],
@@ -74,7 +86,7 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
     const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const fallbackTimerRef = useRef<NodeJS.Timeout | null>(null);
     const receivedChunkRef = useRef(false);
-    const maxCandles = 60;
+    const maxCandles = 500;
     const maxTrades = 50;
 
     const clearFallbackTimer = () => {
@@ -252,38 +264,50 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
                     }
                 }));
                 break;
-            case 'risk_alert':
+            case 'risk_alert': {
                 if (onRiskAlert) onRiskAlert(data);
                 receivedChunkRef.current = false;
                 clearFallbackTimer();
+                const alertId = data.alertId ? String(data.alertId) : null;
                 setState(prev => ({
                     ...prev,
                     currentAlert: {
-                        id: data.alertId,
+                        id: alertId || '',
                         riskLevel: data.riskLevel,
-                        message: data.message || 'Risk detected...',
+                        message: data.message || STREAM_PLACEHOLDER,
                         signals: data.signals || [],
                         isStreaming: data.streaming === true
                     },
+                    currentAlertId: alertId,
+                    streamingAlertId: data.streaming === true ? alertId : null,
+                    streamTextByAlert: alertId
+                        ? { ...prev.streamTextByAlert, [alertId]: '' }
+                        : prev.streamTextByAlert,
                     explanationChunk: null,
                     explanationComplete: false,
                     metrics: {
                         ...prev.metrics,
-                        volumeRatio: data.metrics?.volumeRatio || prev.metrics.volumeRatio,
-                        rangePercent: data.metrics?.rangePercent || prev.metrics.rangePercent
+                        volumeRatio: data.metrics?.volumeRatio ?? prev.metrics.volumeRatio,
+                        rangePercent: data.metrics?.rangePercent ?? prev.metrics.rangePercent
                     }
                 }));
                 if (data.streaming === true && data.alertId) {
                     fallbackTimerRef.current = setTimeout(() => {
                         if (!receivedChunkRef.current) {
                             setState(prev => {
-                                if (!prev.currentAlert || prev.currentAlert.id !== data.alertId) return prev;
+                                if (!prev.currentAlert || prev.currentAlert.id !== String(data.alertId)) return prev;
                                 const safeMessage =
-                                    prev.currentAlert.message && prev.currentAlert.message !== 'Risk detected...'
+                                    prev.currentAlert.message &&
+                                        prev.currentAlert.message !== STREAM_PLACEHOLDER &&
+                                        prev.currentAlert.message !== LEGACY_STREAM_PLACEHOLDER
                                         ? prev.currentAlert.message
                                         : 'Market conditions changed measurably. Price movement variance increased compared to previous intervals.';
                                 return {
                                     ...prev,
+                                    streamTextByAlert: {
+                                        ...prev.streamTextByAlert,
+                                        [String(data.alertId)]: safeMessage
+                                    },
                                     currentAlert: {
                                         ...prev.currentAlert,
                                         message: safeMessage,
@@ -295,45 +319,88 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
                     }, 3000);
                 }
                 break;
+            }
             case 'explanation_chunk':
                 receivedChunkRef.current = true;
                 clearFallbackTimer();
                 setState(prev => {
-                    if (prev.currentAlert && prev.currentAlert.id === data.alertId) {
-                        const chunkText = data.partialText ?? data.chunk ?? '';
-                        const newMessage = prev.currentAlert.message === 'Risk detected...'
-                            ? chunkText
-                            : prev.currentAlert.message + chunkText;
+                    const alertId = data.alertId ? String(data.alertId) : null;
+                    if (!alertId) return prev;
+                    const chunkText = data.partialText ?? data.chunk ?? '';
+                    const resetBuffer =
+                        prev.currentAlert?.id === alertId &&
+                        prev.currentAlert.isStreaming === false;
+                    const priorText = resetBuffer ? '' : (prev.streamTextByAlert[alertId] || '');
+                    const nextText = `${priorText}${chunkText}`;
 
+                    if (prev.currentAlert && prev.currentAlert.id === alertId) {
                         return {
                             ...prev,
                             explanationChunk: chunkText,
+                            currentAlertId: alertId,
+                            streamingAlertId: alertId,
+                            streamTextByAlert: {
+                                ...prev.streamTextByAlert,
+                                [alertId]: nextText
+                            },
                             currentAlert: {
                                 ...prev.currentAlert,
-                                message: newMessage,
+                                message: nextText || prev.currentAlert.message,
                                 isStreaming: true
                             }
                         };
                     }
-                    return prev;
+                    return {
+                        ...prev,
+                        explanationChunk: chunkText,
+                        currentAlertId: prev.currentAlertId ?? alertId,
+                        streamingAlertId: alertId,
+                        streamTextByAlert: {
+                            ...prev.streamTextByAlert,
+                            [alertId]: nextText
+                        }
+                    };
                 });
                 break;
             case 'explanation_complete':
                 clearFallbackTimer();
                 setState(prev => {
-                    if (prev.currentAlert && prev.currentAlert.id === data.alertId) {
+                    const alertId = data.alertId ? String(data.alertId) : null;
+                    const completedText = data.message ||
+                        (alertId ? prev.streamTextByAlert[alertId] : '') ||
+                        prev.currentAlert?.message ||
+                        '';
+                    const nextStreamText = alertId
+                        ? {
+                            ...prev.streamTextByAlert,
+                            [alertId]: completedText
+                        }
+                        : prev.streamTextByAlert;
+                    if (prev.currentAlert && prev.currentAlert.id === alertId) {
                         return {
                             ...prev,
                             explanationComplete: true,
                             explanationChunk: null,
+                            streamingAlertId: null,
+                            streamTextByAlert: nextStreamText,
+                            explanationCompleteTick: prev.explanationCompleteTick + 1,
+                            lastExplanationCompleteAlertId: alertId,
                             currentAlert: {
                                 ...prev.currentAlert,
-                                message: data.message || prev.currentAlert.message,
+                                message: completedText,
                                 isStreaming: false
                             }
                         };
                     }
-                    return { ...prev, explanationComplete: true };
+                    return {
+                        ...prev,
+                        explanationComplete: true,
+                        explanationChunk: null,
+                        streamingAlertId: prev.streamingAlertId === alertId ? null : prev.streamingAlertId,
+                        streamTextByAlert: nextStreamText,
+                        explanationCompleteTick: prev.explanationCompleteTick + 1,
+                        lastExplanationCompleteAlertId: alertId
+                    };
                 });
                 break;
             case 'state_change':
