@@ -365,3 +365,65 @@ export const fetchMarketConfig = async (): Promise<MarketConfigResponse> => {
 
   return response.json();
 };
+
+// Full Market Analysis API
+export interface CandleHistoryItem {
+  openTime: number;
+  closeTime: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface FullAnalysisRequest {
+  candleHistory: CandleHistoryItem[];
+  currentAlert?: {
+    riskDetected?: boolean;
+    state?: string;
+    signals?: string[];
+    metrics?: any;
+  };
+  userContext?: string;
+}
+
+export interface FullAnalysisResponse {
+  riskLevel: 'LOW_RISK' | 'MEDIUM_RISK' | 'HIGH_RISK' | 'CRITICAL_RISK';
+  summary: string;
+  signals: string[];
+  metrics: {
+    volumeRatio?: number;
+    rangePercent?: number;
+    priceChange24h?: number;
+    trades?: number;
+    [key: string]: any;
+  };
+  trends?: {
+    shortTerm?: string;
+    mediumTerm?: string;
+    longTerm?: string;
+  };
+  supportResistance?: {
+    support?: number[];
+    resistance?: number[];
+  };
+  recommendation?: string;
+}
+
+export const getFullMarketAnalysis = async (data: FullAnalysisRequest): Promise<FullAnalysisResponse> => {
+  const response = await fetch(`${API_BASE_URL}/analysis/full`, {
+    method: 'POST',
+    headers: {
+      'accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to get full market analysis');
+  }
+
+  return response.json();
+};

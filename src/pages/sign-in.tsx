@@ -36,6 +36,12 @@ export default async function SignInPage() {
             </div>
 
             <SignInForm />
+
+            {/* Powered by Deriv */}
+            <div className="flex items-center justify-center gap-3 pt-4 border-t border-gray-200">
+              <span className="text-sm text-gray-500">Powered by</span>
+              <img src="/images/deriv.png" alt="Deriv" className="h-10 w-auto" />
+            </div>
           </div>
         </div>
       </div>

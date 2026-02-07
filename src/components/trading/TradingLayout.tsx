@@ -5,7 +5,7 @@ import { OrderPanel } from './OrderPanel';
 import { PositionsPanel } from './PositionsPanel';
 import { ScenarioControls } from './ScenarioControls';
 import { AIRiskModal } from '../ai-risk-modal';
-import { User, fetchMarketConfig } from '../../services/api';
+import { User, fetchMarketConfig, getFullMarketAnalysis, FullAnalysisResponse } from '../../services/api';
 import { getAuthUser, clearAuthData, isAuthenticated } from '../../utils/auth';
 import { useMarketSocket } from '../../hooks/use-market-socket';
 import { EventLog } from './EventLog';
@@ -25,6 +25,8 @@ export const TradingLayout = () => {
 
     // AI Modal State
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [fullAnalysis, setFullAnalysis] = useState<FullAnalysisResponse | null>(null);
+    const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(false);
     const alertIdRef = useRef<string | null>(null);
     const didInitPairRef = useRef(false);
     const didInitTimeframeRef = useRef(false);
@@ -142,6 +144,49 @@ export const TradingLayout = () => {
         window.location.href = '/sign-in';
     };
 
+    const handleFullAnalysis = async () => {
+        if (isLoadingAnalysis) return;
+        
+        setIsLoadingAnalysis(true);
+        addLog('info', 'Fetching full market analysis...');
+        
+        try {
+            // Prepare candle history from current candles
+            const candleHistory = candles.map(c => ({
+                openTime: c.openTime,
+                closeTime: c.closeTime,
+                open: c.open,
+                high: c.high,
+                low: c.low,
+                close: c.close,
+                volume: c.volume
+            }));
+
+            const response = await getFullMarketAnalysis({
+                candleHistory,
+                currentAlert: currentAlert ? {
+                    state: currentAlert.riskLevel,
+                    signals: currentAlert.signals,
+                    metrics: metrics
+                } : {},
+                userContext: activity
+            });
+
+            setFullAnalysis(response);
+            addLog('info', `Full analysis received: ${response.riskLevel}`);
+            
+            // Send alert response
+            if (currentAlert?.id) {
+                sendMessage('alert_response', { alertId: currentAlert.id, response: 'waited' });
+            }
+        } catch (error) {
+            console.error('Failed to fetch full analysis:', error);
+            addLog('error', 'Failed to fetch full market analysis');
+        } finally {
+            setIsLoadingAnalysis(false);
+        }
+    };
+
     useEffect(() => {
         if (pairsList.length && !pairsList.includes(pair)) {
             const nextPair = pairsList[0];
@@ -193,7 +238,7 @@ export const TradingLayout = () => {
             <div className="flex flex-col sm:flex-row bg-[#0b0f14] border-b border-[#283341] px-2 sm:px-4 py-2 gap-2 sm:gap-4">
                 {/* Top Row on Mobile: Logo + User */}
                 <div className="flex items-center justify-between sm:justify-start gap-2 sm:gap-3">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 sm:gap-3">
                         <img 
                             src="/images/logo-mg.png" 
                             alt="Market Guardian" 
@@ -347,25 +392,26 @@ export const TradingLayout = () => {
                 isOpen={isModalOpen}
                 onClose={() => {
                     setIsModalOpen(false);
+                    setFullAnalysis(null);
                     if (currentAlert?.id) {
                         sendMessage('alert_response', { alertId: currentAlert.id, response: 'dismissed' });
                     }
                 }}
-                onExplainMore={() => {
-                    if (currentAlert?.id) {
-                        sendMessage('alert_response', { alertId: currentAlert.id, response: 'waited' });
-                    }
-                }}
+                onExplainMore={handleFullAnalysis}
                 onContinue={() => {
+                    setIsModalOpen(false);
+                    setFullAnalysis(null);
                     if (currentAlert?.id) {
                         sendMessage('alert_response', { alertId: currentAlert.id, response: 'continued' });
                     }
                 }}
-                alertMessage={currentAlert?.message || ''}
-                riskLevel={currentAlert?.riskLevel || 'high'}
-                signals={currentAlert?.signals || []}
-                metrics={metrics}
+                alertMessage={fullAnalysis?.summary || currentAlert?.message || ''}
+                riskLevel={fullAnalysis?.riskLevel || currentAlert?.riskLevel || 'high'}
+                signals={fullAnalysis?.signals || currentAlert?.signals || []}
+                metrics={fullAnalysis?.metrics || metrics}
                 isStreaming={currentAlert?.isStreaming || false}
+                isLoadingAnalysis={isLoadingAnalysis}
+                fullAnalysis={fullAnalysis}
             />
         </div>
     );
