@@ -2,9 +2,12 @@
 
 import { useState, useEffect } from 'react';
 import { Link } from 'waku';
+import { getRefreshToken, updateTokens, clearAuthData } from '../utils/auth';
+import { refreshTokenApi } from '../services/api';
 
 export default function LandingPage() {
   const [isDark, setIsDark] = useState(true);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
   useEffect(() => {
     const saved = localStorage.getItem('theme');
@@ -12,6 +15,44 @@ export default function LandingPage() {
       setIsDark(saved === 'dark');
     }
   }, []);
+
+  useEffect(() => {
+    const checkAndRefreshToken = async () => {
+      const refreshToken = getRefreshToken();
+      
+      if (refreshToken) {
+        try {
+          // Try to refresh the token
+          const response = await refreshTokenApi(refreshToken);
+          
+          if (response.success && response.data) {
+            // Update tokens with new ones
+            updateTokens(response.data.accessToken, response.data.refreshToken);
+            // Redirect to dashboard
+            window.location.href = '/dashboard';
+            return;
+          }
+        } catch (error) {
+          console.error('Token refresh failed:', error);
+          // Clear invalid tokens
+          clearAuthData();
+        }
+      }
+      
+      // No valid tokens, show landing page
+      setIsCheckingAuth(false);
+    };
+
+    checkAndRefreshToken();
+  }, []);
+
+  if (isCheckingAuth) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-gray-950">
+        <div className="text-gray-400">Loading...</div>
+      </div>
+    );
+  }
 
   const toggleTheme = () => {
     const newTheme = !isDark;

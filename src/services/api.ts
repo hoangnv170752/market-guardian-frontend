@@ -29,7 +29,8 @@ export interface LoginResponse {
   message: string;
   data: {
     user: User;
-    token: string;
+    accessToken: string;
+    refreshToken: string;
   };
   errors: any[];
 }
@@ -71,6 +72,37 @@ export const loginApi = async (credentials: LoginRequest): Promise<LoginResponse
       }
       throw new Error('Login failed');
     }
+  }
+
+  return response.json();
+};
+
+export interface RefreshTokenRequest {
+  refreshToken: string;
+}
+
+export interface RefreshTokenResponse {
+  success: boolean;
+  message: string;
+  data: {
+    accessToken: string;
+    refreshToken: string;
+  };
+  errors: any[];
+}
+
+export const refreshTokenApi = async (refreshToken: string): Promise<RefreshTokenResponse> => {
+  const response = await fetch(`${API_BASE_URL}/refresh-token`, {
+    method: 'POST',
+    headers: {
+      'accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ refreshToken }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to refresh token');
   }
 
   return response.json();

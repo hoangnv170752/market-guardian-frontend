@@ -22,7 +22,7 @@ export const SignInForm = () => {
       const data = await loginApi({ email, password });
 
       if (data.success && data.data) {
-        saveAuthData(email, password, data.data.token, data.data.user);
+        saveAuthData(email, password, data.data.accessToken, data.data.refreshToken, data.data.user);
         window.location.href = '/dashboard';
       } else {
         setError(data.message || 'Login failed. Please try again.');
