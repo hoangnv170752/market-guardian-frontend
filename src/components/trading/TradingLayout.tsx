@@ -5,7 +5,7 @@ import { OrderPanel } from './OrderPanel';
 import { PositionsPanel } from './PositionsPanel';
 import { ScenarioControls } from './ScenarioControls';
 import { AIRiskModal } from '../ai-risk-modal';
-import { User, fetchMarketConfig, getFullMarketAnalysis, FullAnalysisResponse } from '../../services/api';
+import { User, fetchMarketConfig } from '../../services/api';
 import { getAuthUser, clearAuthData, isAuthenticated } from '../../utils/auth';
 import { useMarketSocket } from '../../hooks/use-market-socket';
 import { EventLog } from './EventLog';
@@ -25,8 +25,11 @@ export const TradingLayout = () => {
 
     // AI Modal State
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [fullAnalysis, setFullAnalysis] = useState<FullAnalysisResponse | null>(null);
-    const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(false);
+    const [followupRequestedForAlert, setFollowupRequestedForAlert] = useState<string | null>(null);
+    const [followupRequestedAtTick, setFollowupRequestedAtTick] = useState<number | null>(null);
+    const [followupUsedForAlert, setFollowupUsedForAlert] = useState<string | null>(null);
+    const [isExplainLoading, setIsExplainLoading] = useState(false);
+    const fallbackTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const alertIdRef = useRef<string | null>(null);
     const didInitPairRef = useRef(false);
     const didInitTimeframeRef = useRef(false);
@@ -53,10 +56,15 @@ export const TradingLayout = () => {
         orderbook,
         tradesFeed,
         currentAlert,
+        currentAlertId,
+        streamingAlertId,
+        streamTextByAlert,
+        explanationCompleteTick,
+        lastExplanationCompleteAlertId,
         sendMessage
     } = useMarketSocket({
         onEvent: (event, data) => {
-            if (event === 'error' || event === 'ws_error') {
+            if (event === 'error' || event === 'ws_error' || event === 'candles_error') {
                 addLog('error', data?.message || 'WebSocket error');
             }
         }
@@ -77,6 +85,17 @@ export const TradingLayout = () => {
         },
         [scenariosList]
     );
+
+    const clearExplainTimeout = useCallback(() => {
+        if (fallbackTimeoutRef.current) {
+            clearTimeout(fallbackTimeoutRef.current);
+            fallbackTimeoutRef.current = null;
+        }
+    }, []);
+
+    useEffect(() => {
+        return () => clearExplainTimeout();
+    }, [clearExplainTimeout]);
 
     useEffect(() => {
         if (!didInitPairRef.current && selectedPair) {
@@ -120,12 +139,16 @@ export const TradingLayout = () => {
     }, []);
 
     useEffect(() => {
-        if (currentAlert?.id && currentAlert.id !== alertIdRef.current) {
-            alertIdRef.current = currentAlert.id;
+        if (currentAlertId && currentAlertId !== alertIdRef.current) {
+            alertIdRef.current = currentAlertId;
+            setFollowupRequestedForAlert(null);
+            setFollowupRequestedAtTick(null);
+            setIsExplainLoading(false);
+            clearExplainTimeout();
             setIsModalOpen(true);
-            addLog('warn', `Risk alert: ${currentAlert.riskLevel}`);
+            addLog('warn', `Risk alert: ${currentAlert?.riskLevel || 'UNKNOWN'}`);
         }
-    }, [currentAlert?.id]);
+    }, [currentAlertId, currentAlert?.riskLevel, addLog, clearExplainTimeout]);
 
     const handleTimeframeChange = (tf: string) => {
         setTimeframe(tf);
@@ -144,48 +167,56 @@ export const TradingLayout = () => {
         window.location.href = '/sign-in';
     };
 
-    const handleFullAnalysis = async () => {
-        if (isLoadingAnalysis) return;
-        
-        setIsLoadingAnalysis(true);
-        addLog('info', 'Fetching full market analysis...');
-        
-        try {
-            // Prepare candle history from current candles
-            const candleHistory = candles.map(c => ({
-                openTime: c.openTime,
-                closeTime: c.closeTime,
-                open: c.open,
-                high: c.high,
-                low: c.low,
-                close: c.close,
-                volume: c.volume
-            }));
+    const handleExplainMore = useCallback(() => {
+        if (!currentAlertId) return;
+        if (isExplainLoading) return;
+        if (followupUsedForAlert === currentAlertId) return;
 
-            const response = await getFullMarketAnalysis({
-                candleHistory,
-                currentAlert: currentAlert ? {
-                    state: currentAlert.riskLevel,
-                    signals: currentAlert.signals,
-                    metrics: metrics
-                } : {},
-                userContext: activity
-            });
+        setIsExplainLoading(true);
+        setFollowupRequestedForAlert(currentAlertId);
+        setFollowupRequestedAtTick(explanationCompleteTick);
+        sendMessage('alert_response', { alertId: currentAlertId, response: 'waited' });
+        addLog('info', `Requested follow-up explanation for alert ${currentAlertId}`);
 
-            setFullAnalysis(response);
-            addLog('info', `Full analysis received: ${response.riskLevel}`);
-            
-            // Send alert response
-            if (currentAlert?.id) {
-                sendMessage('alert_response', { alertId: currentAlert.id, response: 'waited' });
-            }
-        } catch (error) {
-            console.error('Failed to fetch full analysis:', error);
-            addLog('error', 'Failed to fetch full market analysis');
-        } finally {
-            setIsLoadingAnalysis(false);
-        }
-    };
+        clearExplainTimeout();
+        const requestedAlertId = currentAlertId;
+        fallbackTimeoutRef.current = setTimeout(() => {
+            setIsExplainLoading(false);
+            setFollowupRequestedForAlert(prev => (prev === requestedAlertId ? null : prev));
+            setFollowupRequestedAtTick(null);
+            addLog('warn', `Follow-up explanation timeout for alert ${requestedAlertId}`);
+        }, 15000);
+    }, [
+        currentAlertId,
+        isExplainLoading,
+        followupUsedForAlert,
+        explanationCompleteTick,
+        sendMessage,
+        addLog,
+        clearExplainTimeout
+    ]);
+
+    useEffect(() => {
+        if (!followupRequestedForAlert) return;
+        if (followupRequestedAtTick === null) return;
+        if (!lastExplanationCompleteAlertId) return;
+        if (lastExplanationCompleteAlertId !== followupRequestedForAlert) return;
+        if (explanationCompleteTick <= followupRequestedAtTick) return;
+
+        setFollowupUsedForAlert(lastExplanationCompleteAlertId);
+        setFollowupRequestedForAlert(null);
+        setFollowupRequestedAtTick(null);
+        setIsExplainLoading(false);
+        clearExplainTimeout();
+        addLog('info', `Follow-up explanation completed for alert ${lastExplanationCompleteAlertId}`);
+    }, [
+        explanationCompleteTick,
+        followupRequestedForAlert,
+        followupRequestedAtTick,
+        lastExplanationCompleteAlertId,
+        clearExplainTimeout,
+        addLog
+    ]);
 
     useEffect(() => {
         if (pairsList.length && !pairsList.includes(pair)) {
@@ -232,6 +263,14 @@ export const TradingLayout = () => {
         }
     }, [streamStatus]);
 
+    const activeAlertId = currentAlertId || currentAlert?.id || null;
+    const streamedAlertMessage = activeAlertId ? streamTextByAlert[activeAlertId] : '';
+    const alertMessage = streamedAlertMessage || currentAlert?.message || '';
+    const isStreaming =
+        currentAlert?.isStreaming ||
+        (Boolean(streamingAlertId) && Boolean(activeAlertId) && streamingAlertId === activeAlertId);
+    const explainUsedForCurrent = Boolean(activeAlertId) && followupUsedForAlert === activeAlertId;
+
     return (
         <div className="flex flex-col h-screen w-full bg-[#0b0f14] text-white font-sans overflow-hidden" suppressHydrationWarning>
             {/* Top Bar with Logo, Stats & User Info */}
@@ -239,14 +278,14 @@ export const TradingLayout = () => {
                 {/* Top Row on Mobile: Logo + User */}
                 <div className="flex items-center justify-between sm:justify-start gap-2 sm:gap-3">
                     <div className="flex items-center gap-2 sm:gap-3">
-                        <img 
-                            src="/images/logo-mg.png" 
-                            alt="Market Guardian" 
+                        <img
+                            src="/images/logo-mg.png"
+                            alt="Market Guardian"
                             className="h-7 w-7 sm:h-8 sm:w-8 object-contain"
                         />
                         <span className="text-base sm:text-lg font-bold text-white">Market Guardian</span>
                     </div>
-                    
+
                     {/* Mobile User Info */}
                     <div className="flex sm:hidden items-center gap-2">
                         <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-white text-xs font-semibold">
@@ -273,10 +312,7 @@ export const TradingLayout = () => {
                 <div className="flex items-center gap-1 sm:gap-3 flex-wrap sm:flex-nowrap">
                     <div className="flex items-center gap-1 sm:gap-2 flex-wrap">
                         <span className={`text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full border ${isConnected ? 'border-[#2bd47d] text-[#2bd47d]' : 'border-[#ff5c5c] text-[#ff5c5c]'}`}>
-                            {isConnected ? 'CONN' : 'DISC'}
-                        </span>
-                        <span className={`text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full border ${streamStatus === 'running' ? 'border-[#2bd47d] text-[#2bd47d]' : 'border-[#54616e] text-[#9aa7b2]'}`}>
-                            {streamStatus === 'running' ? 'STREAM' : 'STOP'}
+                            {isConnected ? 'Connected' : 'Disconnected'}
                         </span>
                         <span className={`hidden sm:inline text-xs px-2 py-1 rounded-full border ${marketState === 'HIGH_RISK' ? 'border-[#ff5c5c] text-[#ff5c5c]' : marketState === 'VOLATILE' ? 'border-[#f0b90b] text-[#f0b90b]' : 'border-[#2bd47d] text-[#2bd47d]'}`}>
                             {marketState}
@@ -326,7 +362,7 @@ export const TradingLayout = () => {
                             Trading
                         </button>
                     </div>
-                    
+
                     {/* User Account Info */}
                     <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-[#1a2332] rounded-lg border border-[#283341]">
                         <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-white text-xs font-semibold">
@@ -379,7 +415,7 @@ export const TradingLayout = () => {
                     <OrderPanel />
                     <OrderbookTradesPanel orderbook={orderbook} trades={tradesFeed} />
                     <EventLog entries={eventLog} />
-                    
+
                     {/* Mobile Positions Tab */}
                     <div className="lg:hidden">
                         <PositionsPanel />
@@ -392,26 +428,24 @@ export const TradingLayout = () => {
                 isOpen={isModalOpen}
                 onClose={() => {
                     setIsModalOpen(false);
-                    setFullAnalysis(null);
-                    if (currentAlert?.id) {
-                        sendMessage('alert_response', { alertId: currentAlert.id, response: 'dismissed' });
+                    if (activeAlertId) {
+                        sendMessage('alert_response', { alertId: activeAlertId, response: 'dismissed' });
                     }
                 }}
-                onExplainMore={handleFullAnalysis}
+                onExplainMore={handleExplainMore}
                 onContinue={() => {
                     setIsModalOpen(false);
-                    setFullAnalysis(null);
-                    if (currentAlert?.id) {
-                        sendMessage('alert_response', { alertId: currentAlert.id, response: 'continued' });
+                    if (activeAlertId) {
+                        sendMessage('alert_response', { alertId: activeAlertId, response: 'continued' });
                     }
                 }}
-                alertMessage={fullAnalysis?.summary || currentAlert?.message || ''}
-                riskLevel={fullAnalysis?.riskLevel || currentAlert?.riskLevel || 'high'}
-                signals={fullAnalysis?.signals || currentAlert?.signals || []}
-                metrics={fullAnalysis?.metrics || metrics}
-                isStreaming={currentAlert?.isStreaming || false}
-                isLoadingAnalysis={isLoadingAnalysis}
-                fullAnalysis={fullAnalysis}
+                alertMessage={alertMessage}
+                riskLevel={currentAlert?.riskLevel || 'high'}
+                signals={currentAlert?.signals || []}
+                metrics={metrics}
+                isStreaming={isStreaming}
+                isExplainLoading={isExplainLoading}
+                isExplainUsed={explainUsedForCurrent}
             />
         </div>
     );

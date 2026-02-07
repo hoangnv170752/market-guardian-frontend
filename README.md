@@ -7,7 +7,6 @@ A modern trading platform that translates complex market conditions into clear, 
 - **Waku**: Minimal React framework
 - **React 19**: Latest React version
 - **Tailwind CSS**: Utility-first styling
-- **Syncfusion Charts**: Professional candlestick trading charts
 - **TypeScript**: Type-safe development
 
 ## Key Features
@@ -73,9 +72,7 @@ src/
 │   ├── header.tsx
 │   ├── sign-in-form.tsx
 │   ├── sign-up-form.tsx
-│   └── trading-chart.tsx      # Syncfusion candlestick chart
-├── lib/
-│   └── syncfusion-license.ts  # Chart library license
+│   └── trading-chart.tsx
 ├── pages/
 │   ├── _layout.tsx            # Root layout
 │   ├── index.tsx              # Landing page
@@ -92,7 +89,10 @@ src/
 
 - Edit `tailwind.config.ts` for styling
 - Modify routes in `/src/pages`
-- Update Syncfusion license in `/src/lib/syncfusion-license.ts`
+
+## Backend Repository
+
+- https://github.com/mghulamqadir/market-guardian-ai-backend
 
 ## Changelog
 
