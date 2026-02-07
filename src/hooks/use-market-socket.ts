@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Candle } from '../services/api';
+import { Candle, fetchMarketCandles } from '../services/api';
 
 interface WebSocketMessage {
     event: string;
@@ -86,8 +86,24 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
     const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const fallbackTimerRef = useRef<NodeJS.Timeout | null>(null);
     const receivedChunkRef = useRef(false);
+    const selectedPairRef = useRef<string | null>(null);
+    const selectedTimeframeRef = useRef<string | null>(null);
+    const candlesFetchSeqRef = useRef(0);
+    const onEventRef = useRef(onEvent);
     const maxCandles = 500;
     const maxTrades = 50;
+
+    useEffect(() => {
+        onEventRef.current = onEvent;
+    }, [onEvent]);
+
+    useEffect(() => {
+        selectedPairRef.current = state.selectedPair;
+    }, [state.selectedPair]);
+
+    useEffect(() => {
+        selectedTimeframeRef.current = state.selectedTimeframe;
+    }, [state.selectedTimeframe]);
 
     const clearFallbackTimer = () => {
         if (fallbackTimerRef.current) {
@@ -95,6 +111,60 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
             fallbackTimerRef.current = null;
         }
     };
+
+    const loadCandlesHistory = useCallback(async (params: {
+        pair?: string | null;
+        timeframe?: string | null;
+        sessionId?: string;
+        from?: string | number;
+        to?: string | number;
+        limit?: number;
+    } = {}) => {
+        const pair = params.pair ?? selectedPairRef.current;
+        const timeframe = params.timeframe ?? selectedTimeframeRef.current;
+        if (!pair || !timeframe) return;
+
+        const requestId = ++candlesFetchSeqRef.current;
+        try {
+            const candleParams: {
+                pair: string;
+                timeframe: string;
+                limit: number;
+                sessionId?: string;
+                from?: string | number;
+                to?: string | number;
+            } = {
+                pair,
+                timeframe,
+                limit: Math.max(1, Math.min(1000, params.limit ?? 300)),
+            };
+            if (params.sessionId !== undefined) candleParams.sessionId = params.sessionId;
+            if (params.from !== undefined) candleParams.from = params.from;
+            if (params.to !== undefined) candleParams.to = params.to;
+            const result = await fetchMarketCandles(candleParams);
+
+            setState(prev => {
+                if (requestId !== candlesFetchSeqRef.current) return prev;
+                if (prev.selectedPair && prev.selectedPair !== pair) return prev;
+                if (prev.selectedTimeframe && prev.selectedTimeframe !== timeframe) return prev;
+                const nextCandles = result.candles.slice(-maxCandles);
+                return {
+                    ...prev,
+                    candles: nextCandles,
+                    lastCandle: nextCandles[nextCandles.length - 1] || null,
+                };
+            });
+        } catch (error: any) {
+            if (requestId !== candlesFetchSeqRef.current) return;
+            if (onEventRef.current) {
+                onEventRef.current('candles_error', {
+                    message: error?.message || 'Failed to fetch candles',
+                    pair,
+                    timeframe,
+                });
+            }
+        }
+    }, []);
 
     const connect = useCallback(() => {
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -121,7 +191,7 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
 
         ws.onerror = (error) => {
             console.error('WebSocket error:', error);
-            if (onEvent) onEvent('ws_error', error);
+            if (onEventRef.current) onEventRef.current('ws_error', error);
         };
 
         ws.onmessage = (event) => {
@@ -151,10 +221,27 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
 
     const handleMessage = (msg: WebSocketMessage) => {
         const { event, data } = msg;
-        if (onEvent) onEvent(event, data);
+        if (onEventRef.current) onEventRef.current(event, data);
 
         switch (event) {
             case 'connected':
+                {
+                const connectedPairs = Array.isArray(data.availablePairs) ? data.availablePairs : [];
+                const connectedTimeframes = Array.isArray(data.availableTimeframes) ? data.availableTimeframes : [];
+                const nextPairForFetch = (
+                    data.pair ??
+                    data.selectedPair ??
+                    selectedPairRef.current ??
+                    connectedPairs[0] ??
+                    null
+                );
+                const nextTimeframeForFetch = (
+                    data.timeframe ??
+                    data.selectedTimeframe ??
+                    selectedTimeframeRef.current ??
+                    connectedTimeframes[0] ??
+                    null
+                );
                 setState(prev => {
                     const availablePairs = Array.isArray(data.availablePairs) ? data.availablePairs : prev.availablePairs;
                     const availableTimeframes = Array.isArray(data.availableTimeframes) ? data.availableTimeframes : prev.availableTimeframes;
@@ -189,6 +276,10 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
                         data.currentScenario ??
                         prev.currentScenario ??
                         null;
+                    const pairChanged =
+                        nextSelectedPair !== null &&
+                        prev.selectedPair !== null &&
+                        nextSelectedPair !== prev.selectedPair;
                     return {
                         ...prev,
                         availablePairs,
@@ -198,13 +289,37 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
                         selectedTimeframe: nextSelectedTimeframe,
                         currentScenario: nextScenario,
                         streamStatus: streamStatusValue,
-                        candles: data.candleHistory ? data.candleHistory.slice(-maxCandles) : prev.candles,
-                        lastCandle: data.candleHistory ? data.candleHistory[data.candleHistory.length - 1] || null : prev.lastCandle,
+                        candles: data.candleHistory
+                            ? data.candleHistory.slice(-maxCandles)
+                            : pairChanged
+                                ? []
+                                : prev.candles,
+                        lastCandle: data.candleHistory
+                            ? data.candleHistory[data.candleHistory.length - 1] || null
+                            : pairChanged
+                                ? null
+                                : prev.lastCandle,
+                        orderbook: pairChanged ? null : prev.orderbook,
+                        tradesFeed: pairChanged ? [] : prev.tradesFeed,
                     };
                 });
+                if (nextPairForFetch && nextTimeframeForFetch) {
+                    void loadCandlesHistory({
+                        pair: String(nextPairForFetch),
+                        timeframe: String(nextTimeframeForFetch),
+                        limit: 300,
+                    });
+                }
                 break;
+                }
             case 'candle':
                 setState(prev => {
+                    if (data?.symbol && prev.selectedPair && data.symbol !== prev.selectedPair) {
+                        return prev;
+                    }
+                    if (data?.timeframe && prev.selectedTimeframe && data.timeframe !== prev.selectedTimeframe) {
+                        return prev;
+                    }
                     const newCandles = [...prev.candles];
                     const lastIdx = newCandles.length - 1;
 
@@ -242,6 +357,12 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
                 break;
             case 'candle_closed':
                 setState(prev => {
+                    if (data?.symbol && prev.selectedPair && data.symbol !== prev.selectedPair) {
+                        return prev;
+                    }
+                    if (data?.timeframe && prev.selectedTimeframe && data.timeframe !== prev.selectedTimeframe) {
+                        return prev;
+                    }
                     const newCandles = [...prev.candles];
                     const existingIdx = newCandles.findIndex(c => c.openTime === data.openTime);
                     if (existingIdx >= 0) {
@@ -454,14 +575,54 @@ export const useMarketSocket = ({ onRiskAlert, onEvent, enabled = true }: UseMar
     };
 
     const sendMessage = useCallback((event: string, data: any = {}) => {
+        // Clear stale market data immediately when switching pair/timeframe.
+        if (event === 'set_pair' && data?.pair) {
+            const nextPair = String(data.pair);
+            const nextTimeframe = data?.timeframe
+                ? String(data.timeframe)
+                : (selectedTimeframeRef.current || '1m');
+            setState(prev => ({
+                ...prev,
+                selectedPair: nextPair,
+                selectedTimeframe: prev.selectedTimeframe || nextTimeframe,
+                candles: [],
+                lastCandle: null,
+                orderbook: null,
+                tradesFeed: [],
+            }));
+            void loadCandlesHistory({
+                pair: nextPair,
+                timeframe: nextTimeframe,
+                limit: 300,
+            });
+        }
+        if (event === 'set_timeframe' && data?.timeframe) {
+            const nextTimeframe = String(data.timeframe);
+            const nextPair = data?.pair
+                ? String(data.pair)
+                : (selectedPairRef.current || 'BTC/USDT');
+            setState(prev => ({
+                ...prev,
+                selectedPair: prev.selectedPair || nextPair,
+                selectedTimeframe: nextTimeframe,
+                candles: [],
+                lastCandle: null,
+            }));
+            void loadCandlesHistory({
+                pair: nextPair,
+                timeframe: nextTimeframe,
+                limit: 300,
+            });
+        }
         if (wsRef.current?.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({ event, data }));
         }
-    }, []);
+    }, [loadCandlesHistory]);
 
     return {
         ...state,
         sendMessage,
+        refetchCandles: loadCandlesHistory,
         isConnected: state.isConnected
     };
 };

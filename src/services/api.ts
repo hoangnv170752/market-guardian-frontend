@@ -366,6 +366,132 @@ export const fetchMarketConfig = async (): Promise<MarketConfigResponse> => {
   return response.json();
 };
 
+export interface FetchMarketCandlesParams {
+  pair?: string;
+  timeframe?: '1s' | '1m' | '5m' | '15m' | '1h' | '4h' | '1d' | string;
+  sessionId?: string;
+  from?: string | number;
+  to?: string | number;
+  limit?: number;
+}
+
+interface MarketCandleApiItem {
+  id: number;
+  sessionId: string;
+  symbol: string;
+  timeframe: string;
+  openTime: string | number;
+  closeTime: string | number;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+}
+
+interface MarketCandlesApiResponse {
+  success: boolean;
+  message: string;
+  data?: {
+    candles: MarketCandleApiItem[];
+    count: number;
+    filters: {
+      pair: string | null;
+      timeframe: string | null;
+      sessionId: string | null;
+      from: string | number | null;
+      to: string | number | null;
+      limit: number;
+    };
+  };
+  errors: any[];
+}
+
+export interface FetchMarketCandlesResult {
+  candles: Candle[];
+  count: number;
+  filters: {
+    pair: string | null;
+    timeframe: string | null;
+    sessionId: string | null;
+    from: string | number | null;
+    to: string | number | null;
+    limit: number;
+  } | null;
+  message: string;
+}
+
+const parseTimeToMs = (value: string | number): number => {
+  if (typeof value === 'number') return value;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const mapMarketCandleToCandle = (c: MarketCandleApiItem): Candle => ({
+  symbol: c.symbol,
+  timeframe: c.timeframe,
+  openTime: parseTimeToMs(c.openTime),
+  closeTime: parseTimeToMs(c.closeTime),
+  open: Number(c.open),
+  high: Number(c.high),
+  low: Number(c.low),
+  close: Number(c.close),
+  volume: Number(c.volume),
+  quoteVolume: 0,
+  trades: 0,
+  takerBuyVolume: 0,
+  takerBuyQuoteVolume: 0,
+  isClosed: true,
+  scenario: 'normal',
+});
+
+export const fetchMarketCandles = async (params: FetchMarketCandlesParams = {}): Promise<FetchMarketCandlesResult> => {
+  const searchParams = new URLSearchParams();
+  if (params.pair) searchParams.set('pair', params.pair);
+  if (params.timeframe) searchParams.set('timeframe', params.timeframe);
+  if (params.sessionId) searchParams.set('sessionId', params.sessionId);
+  if (params.from !== undefined) searchParams.set('from', String(params.from));
+  if (params.to !== undefined) searchParams.set('to', String(params.to));
+  if (params.limit !== undefined) {
+    const safeLimit = Math.max(1, Math.min(1000, Number(params.limit) || 200));
+    searchParams.set('limit', String(safeLimit));
+  }
+
+  const response = await fetch(`${API_BASE_URL}/market/candles?${searchParams.toString()}`, {
+    method: 'GET',
+    headers: {
+      accept: 'application/json',
+    },
+  });
+
+  let payload: MarketCandlesApiResponse | null = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    throw new Error(payload?.message || 'Failed to fetch candles');
+  }
+  if (!payload?.success) {
+    throw new Error(payload?.message || 'Failed to fetch candles');
+  }
+
+  const candles = Array.isArray(payload.data?.candles)
+    ? payload.data!.candles.map(mapMarketCandleToCandle)
+    : [];
+
+  return {
+    candles,
+    count: payload.data?.count || candles.length,
+    filters: payload.data?.filters || null,
+    message: payload.message,
+  };
+};
+
 // Full Market Analysis API
 export interface CandleHistoryItem {
   openTime: number;

@@ -64,7 +64,7 @@ export const TradingLayout = () => {
         sendMessage
     } = useMarketSocket({
         onEvent: (event, data) => {
-            if (event === 'error' || event === 'ws_error') {
+            if (event === 'error' || event === 'ws_error' || event === 'candles_error') {
                 addLog('error', data?.message || 'WebSocket error');
             }
         }
@@ -278,14 +278,14 @@ export const TradingLayout = () => {
                 {/* Top Row on Mobile: Logo + User */}
                 <div className="flex items-center justify-between sm:justify-start gap-2 sm:gap-3">
                     <div className="flex items-center gap-2 sm:gap-3">
-                        <img 
-                            src="/images/logo-mg.png" 
-                            alt="Market Guardian" 
+                        <img
+                            src="/images/logo-mg.png"
+                            alt="Market Guardian"
                             className="h-7 w-7 sm:h-8 sm:w-8 object-contain"
                         />
                         <span className="text-base sm:text-lg font-bold text-white">Market Guardian</span>
                     </div>
-                    
+
                     {/* Mobile User Info */}
                     <div className="flex sm:hidden items-center gap-2">
                         <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-white text-xs font-semibold">
@@ -312,10 +312,7 @@ export const TradingLayout = () => {
                 <div className="flex items-center gap-1 sm:gap-3 flex-wrap sm:flex-nowrap">
                     <div className="flex items-center gap-1 sm:gap-2 flex-wrap">
                         <span className={`text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full border ${isConnected ? 'border-[#2bd47d] text-[#2bd47d]' : 'border-[#ff5c5c] text-[#ff5c5c]'}`}>
-                            {isConnected ? 'CONN' : 'DISC'}
-                        </span>
-                        <span className={`text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full border ${streamStatus === 'running' ? 'border-[#2bd47d] text-[#2bd47d]' : 'border-[#54616e] text-[#9aa7b2]'}`}>
-                            {streamStatus === 'running' ? 'STREAM' : 'STOP'}
+                            {isConnected ? 'Connected' : 'Disconnected'}
                         </span>
                         <span className={`hidden sm:inline text-xs px-2 py-1 rounded-full border ${marketState === 'HIGH_RISK' ? 'border-[#ff5c5c] text-[#ff5c5c]' : marketState === 'VOLATILE' ? 'border-[#f0b90b] text-[#f0b90b]' : 'border-[#2bd47d] text-[#2bd47d]'}`}>
                             {marketState}
@@ -365,7 +362,7 @@ export const TradingLayout = () => {
                             Trading
                         </button>
                     </div>
-                    
+
                     {/* User Account Info */}
                     <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-[#1a2332] rounded-lg border border-[#283341]">
                         <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-white text-xs font-semibold">
@@ -418,7 +415,7 @@ export const TradingLayout = () => {
                     <OrderPanel />
                     <OrderbookTradesPanel orderbook={orderbook} trades={tradesFeed} />
                     <EventLog entries={eventLog} />
-                    
+
                     {/* Mobile Positions Tab */}
                     <div className="lg:hidden">
                         <PositionsPanel />
