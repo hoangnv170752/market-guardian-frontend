@@ -190,56 +190,76 @@ export const TradingLayout = () => {
     return (
         <div className="flex flex-col h-screen w-full bg-[#0b0f14] text-white font-sans overflow-hidden" suppressHydrationWarning>
             {/* Top Bar with Logo, Stats & User Info */}
-            <div className="flex bg-[#0b0f14] border-b border-[#283341] px-4 py-2 items-center justify-between gap-4">
-                {/* Left: Logo */}
-                <div className="flex items-center gap-3 min-w-fit">
-                    <img 
-                        src="/images/logo-mg.png" 
-                        alt="Market Guardian" 
-                        className="h-8 w-8 object-contain"
-                    />
-                    <span className="text-lg font-bold text-white hidden sm:block">Market Guardian</span>
+            <div className="flex flex-col sm:flex-row bg-[#0b0f14] border-b border-[#283341] px-2 sm:px-4 py-2 gap-2 sm:gap-4">
+                {/* Top Row on Mobile: Logo + User */}
+                <div className="flex items-center justify-between sm:justify-start gap-2 sm:gap-3">
+                    <div className="flex items-center gap-2">
+                        <img 
+                            src="/images/logo-mg.png" 
+                            alt="Market Guardian" 
+                            className="h-7 w-7 sm:h-8 sm:w-8 object-contain"
+                        />
+                        <span className="text-base sm:text-lg font-bold text-white">Market Guardian</span>
+                    </div>
+                    
+                    {/* Mobile User Info */}
+                    <div className="flex sm:hidden items-center gap-2">
+                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-white text-xs font-semibold">
+                            {user?.name?.charAt(0).toUpperCase() || 'U'}
+                        </div>
+                        <button
+                            onClick={handleSignOut}
+                            className="p-1.5 hover:bg-[#1a2332] rounded-lg transition-colors"
+                            title="Sign Out"
+                        >
+                            <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                            </svg>
+                        </button>
+                    </div>
                 </div>
 
-                {/* Center: Market Stats */}
-                <div className="flex-1 flex justify-center">
+                {/* Center: Market Stats - Hidden on small mobile */}
+                <div className="hidden md:flex flex-1 justify-center">
                     <MarketStats metrics={metrics} />
                 </div>
 
                 {/* Right: User Info & Controls */}
-                <div className="flex items-center gap-3 min-w-fit">
-                    <div className="flex items-center gap-2">
-                        <span className={`text-xs px-2 py-1 rounded-full border ${isConnected ? 'border-[#2bd47d] text-[#2bd47d]' : 'border-[#ff5c5c] text-[#ff5c5c]'}`}>
-                            {isConnected ? 'CONNECTED' : 'DISCONNECTED'}
+                <div className="flex items-center gap-1 sm:gap-3 flex-wrap sm:flex-nowrap">
+                    <div className="flex items-center gap-1 sm:gap-2 flex-wrap">
+                        <span className={`text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full border ${isConnected ? 'border-[#2bd47d] text-[#2bd47d]' : 'border-[#ff5c5c] text-[#ff5c5c]'}`}>
+                            {isConnected ? 'CONN' : 'DISC'}
                         </span>
-                        <span className={`text-xs px-2 py-1 rounded-full border ${streamStatus === 'running' ? 'border-[#2bd47d] text-[#2bd47d]' : 'border-[#54616e] text-[#9aa7b2]'}`}>
-                            {streamStatus === 'running' ? 'STREAMING' : 'STOPPED'}
+                        <span className={`text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full border ${streamStatus === 'running' ? 'border-[#2bd47d] text-[#2bd47d]' : 'border-[#54616e] text-[#9aa7b2]'}`}>
+                            {streamStatus === 'running' ? 'STREAM' : 'STOP'}
                         </span>
-                        <span className={`text-xs px-2 py-1 rounded-full border ${marketState === 'HIGH_RISK' ? 'border-[#ff5c5c] text-[#ff5c5c]' : marketState === 'VOLATILE' ? 'border-[#f0b90b] text-[#f0b90b]' : 'border-[#2bd47d] text-[#2bd47d]'}`}>
+                        <span className={`hidden sm:inline text-xs px-2 py-1 rounded-full border ${marketState === 'HIGH_RISK' ? 'border-[#ff5c5c] text-[#ff5c5c]' : marketState === 'VOLATILE' ? 'border-[#f0b90b] text-[#f0b90b]' : 'border-[#2bd47d] text-[#2bd47d]'}`}>
                             {marketState}
                         </span>
-                        <span className="text-xs px-2 py-1 rounded-full border border-[#283341] text-[#9aa7b2]">
+                        <span className="hidden lg:inline text-xs px-2 py-1 rounded-full border border-[#283341] text-[#9aa7b2]">
                             {currentScenario ? `SCENARIO: ${currentScenario}` : 'SCENARIO: NORMAL'}
                         </span>
                     </div>
 
-                    <ScenarioControls
-                        onScenario={(scenario) => {
-                            const resolved = resolveScenario(scenario);
-                            if (!resolved) {
-                                addLog('warn', `Scenario not available: ${scenario}`);
-                                return;
-                            }
-                            sendMessage('set_scenario', {
-                                scenario: resolved,
-                                duration: 15,
-                                intensity: 1.0
-                            });
-                            addLog('warn', `Scenario triggered: ${resolved}`);
-                        }}
-                    />
+                    <div className="hidden sm:block">
+                        <ScenarioControls
+                            onScenario={(scenario) => {
+                                const resolved = resolveScenario(scenario);
+                                if (!resolved) {
+                                    addLog('warn', `Scenario not available: ${scenario}`);
+                                    return;
+                                }
+                                sendMessage('set_scenario', {
+                                    scenario: resolved,
+                                    duration: 15,
+                                    intensity: 1.0
+                                });
+                                addLog('warn', `Scenario triggered: ${resolved}`);
+                            }}
+                        />
+                    </div>
 
-                    <div className="flex items-center gap-1 rounded bg-[#141b23] p-1">
+                    <div className="hidden md:flex items-center gap-1 rounded bg-[#141b23] p-1">
                         <button
                             onClick={() => {
                                 setActivity('viewing_chart');
@@ -272,10 +292,10 @@ export const TradingLayout = () => {
                         </div>
                     </div>
 
-                    {/* Sign Out Button */}
+                    {/* Desktop Sign Out Button */}
                     <button
                         onClick={handleSignOut}
-                        className="p-2 hover:bg-[#1a2332] rounded-lg transition-colors"
+                        className="hidden sm:block p-2 hover:bg-[#1a2332] rounded-lg transition-colors"
                         title="Sign Out"
                     >
                         <svg className="h-5 w-5 text-gray-400 hover:text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -286,12 +306,12 @@ export const TradingLayout = () => {
             </div>
 
             {/* Main Grid */}
-            <div className="flex-1 overflow-hidden p-3 gap-3 grid grid-cols-1 lg:grid-cols-[1fr_360px] grid-rows-[1fr_auto] lg:grid-rows-1">
+            <div className="flex-1 overflow-hidden flex flex-col lg:grid lg:grid-cols-[1fr_360px] lg:grid-rows-1 p-2 sm:p-3 gap-2 sm:gap-3">
 
                 {/* Left Column: Chart & Positions */}
-                <div className="flex flex-col gap-3 min-h-0">
-                    {/* Chart Area */}
-                    <div className="flex-1 min-h-[400px]">
+                <div className="flex flex-col gap-2 sm:gap-3 lg:min-h-0">
+                    {/* Chart Area - Fixed height on mobile */}
+                    <div className="h-[350px] sm:h-[400px] lg:flex-1 lg:min-h-[400px] shrink-0">
                         <ChartWidget
                             candles={candles}
                             timeframe={timeframe}
@@ -309,16 +329,16 @@ export const TradingLayout = () => {
                     </div>
                 </div>
 
-                {/* Right Column: Order Entry */}
-                <div className="w-full h-full overflow-y-auto flex flex-col gap-3">
+                {/* Right Column: Order Entry - Scrollable on mobile */}
+                <div className="flex-1 lg:h-full overflow-y-auto flex flex-col gap-2 sm:gap-3">
                     <OrderPanel />
                     <OrderbookTradesPanel orderbook={orderbook} trades={tradesFeed} />
                     <EventLog entries={eventLog} />
-                </div>
-
-                {/* Mobile Positions Tab (if needed) */}
-                <div className="lg:hidden h-[300px]">
-                    <PositionsPanel />
+                    
+                    {/* Mobile Positions Tab */}
+                    <div className="lg:hidden">
+                        <PositionsPanel />
+                    </div>
                 </div>
             </div>
 
