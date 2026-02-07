@@ -1,20 +1,18 @@
 'use client';
 
 import { TrendingUp, TrendingDown, Zap } from 'lucide-react';
-import { MarketSimulator } from '../../lib/market-simulator';
-
 interface ScenarioControlsProps {
-    simulator: MarketSimulator;
+    onScenario: (scenario: 'pump' | 'crash') => void;
 }
 
-export const ScenarioControls = ({ simulator }: ScenarioControlsProps) => {
+export const ScenarioControls = ({ onScenario }: ScenarioControlsProps) => {
 
     const handlePump = () => {
-        simulator.triggerScenario('pump');
+        onScenario('pump');
     };
 
     const handleCrash = () => {
-        simulator.triggerScenario('crash');
+        onScenario('crash');
     };
 
     return (

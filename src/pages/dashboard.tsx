@@ -1,12 +1,11 @@
-'use client';
-
-import { TradingLayout } from '../components/trading/TradingLayout';
+import DashboardClient from './dashboard.client';
 
 export default function DashboardPage() {
-  return (
-    <>
-      <title>Market Guardian - Pro Terminal</title>
-      <TradingLayout />
-    </>
-  );
+  return <DashboardClient />;
 }
+
+export const getConfig = async () => {
+  return {
+    render: 'static',
+  } as const;
+};
